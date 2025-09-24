@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Рапорт ВЛК</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 600px;
+        margin: 40px auto;
+        padding: 20px;
+        border: 1px solid #ccc;
+        border-radius: 10px;
+      }
+      label {
+        display: block;
+        margin-top: 15px;
+        font-weight: bold;
+      }
+      input[type="text"],
+      select,
+      textarea {
+        width: 100%;
+        padding: 8px;
+        margin-top: 5px;
+        box-sizing: border-box;
+      }
+      textarea {
+        height: 100px;
+        resize: vertical;
+      }
+      input[type="submit"] {
+        margin-top: 25px;
+        padding: 10px 20px;
+        background-color: #dc3545;
+        color: white;
+        border: none;
+        cursor: pointer;
+        border-radius: 5px;
+      }
+      input[type="submit"]:disabled {
+        background-color: #5a9cec;
+        cursor: not-allowed;
+      }
+      .loader-overlay {
+        display: none;
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(255, 255, 255, 0.7);
+        z-index: 9999;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+      }
+      .spinner {
+        border: 8px solid #f3f3f3;
+        border-top: 8px solid #dc3545;
+        border-radius: 50%;
+        width: 60px;
+        height: 60px;
+        animation: spin 1s linear infinite;
+      }
+      .loader-text {
+        margin-top: 20px;
+        color: #333;
+        font-size: 18px;
+        font-weight: bold;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Стилі для автокомпліту */
+      .autocomplete-container {
+        position: relative;
+        display: inline-block;
+        width: 100%;
+      }
+
+      .autocomplete-suggestions {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid #ccc;
+        border-top: none;
+        max-height: 200px;
+        overflow-y: auto;
+        z-index: 1000;
+        display: none;
+      }
+
+      .autocomplete-suggestion {
+        padding: 8px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #eee;
+      }
+
+      .autocomplete-suggestion:hover,
+      .autocomplete-suggestion.selected {
+        background-color: #f0f0f0;
+      }
+
+      .autocomplete-suggestion:last-child {
+        border-bottom: none;
+      }
+
+      /* Стилі для повідомлень */
+      .alert {
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 5px;
+      }
+
+      .alert-error {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+
+      .alert-success {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+
+      .back-link {
+        display: inline-block;
+        margin-bottom: 20px;
+        color: #dc3545;
+        text-decoration: none;
+        font-weight: bold;
+      }
+
+      .back-link:hover {
+        text-decoration: underline;
+      }
+
+      .form-section {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 20px 0;
+      }
+
+      .form-section h3 {
+        margin-top: 0;
+        color: #495057;
+      }
+
+      .document-fields {
+        background-color: #e9ecef;
+        padding: 10px;
+        border-radius: 5px;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loader" class="loader-overlay" style="display: none">
+      <div class="spinner"></div>
+      <div class="loader-text">
+        Генерація рапорту ВЛК... Зачекайте, будь ласка.
+      </div>
+    </div>
+
+    <a href="/" class="back-link">← Назад до головної</a>
+    <h1>🩺 Рапорт ВЛК</h1>
+
+    <!-- Відображення повідомлень -->
+    {% with messages = get_flashed_messages(with_categories=true) %} {% if
+    messages %} {% for category, message in messages %}
+    <div
+      class="alert alert-{{ 'error' if category == 'error' else 'success' }}"
+    >
+      {{ message }}
+    </div>
+    {% endfor %} {% endif %} {% endwith %}
+
+    <form id="generation-form" method="POST">
+      <div class="form-section">
+        <h3>👤 Основні дані</h3>
+
+        <label for="pib_nazivnyi">ПІБ (в називному відмінку):</label>
+        <div class="autocomplete-container">
+          <input
+            type="text"
+            id="pib_nazivnyi"
+            name="pib_nazivnyi"
+            placeholder="Почніть вводити ПІБ для пошуку..."
+            required
+          />
+          <div id="pib-suggestions" class="autocomplete-suggestions"></div>
+        </div>
+
+        <label for="soldier_rank_rodovuy">Звання (в родовому відмінку):</label>
+        <input
+          type="text"
+          id="soldier_rank_rodovuy"
+          name="soldier_rank_rodovuy"
+          placeholder="Наприклад: солдата"
+        />
+
+        <label for="soldier_full_name_rodovuy"
+          >ПІБ (в родовому відмінку):</label
+        >
+        <input
+          type="text"
+          id="soldier_full_name_rodovuy"
+          name="soldier_full_name_rodovuy"
+          placeholder="Наприклад: Іванова Івана Івановича"
+          required
+        />
+
+        <label for="birth_date">Дата народження:</label>
+        <input
+          type="text"
+          id="birth_date"
+          name="birth_date"
+          placeholder="дд.мм.рррр"
+          pattern="\d{2}\.\d{2}\.\d{4}"
+          title="Введіть дату у форматі дд.мм.рррр"
+        />
+      </div>
+
+      <div class="form-section">
+        <h3>🎖️ Військові дані</h3>
+
+        <label for="zvanie">Військове звання:</label>
+        <select id="zvanie" name="zvanie" required>
+          <option value="">Оберіть звання</option>
+          <option value="солдат">солдат</option>
+          <option value="старший солдат">старший солдат</option>
+          <option value="молодший сержант">молодший сержант</option>
+          <option value="сержант">сержант</option>
+          <option value="старший сержант">старший сержант</option>
+          <option value="головний сержант">головний сержант</option>
+          <option value="штаб-сержант">штаб-сержант</option>
+          <option value="майстер-сержант">майстер-сержант</option>
+          <option value="старший майстер-сержант">
+            старший майстер-сержант
+          </option>
+          <option value="головний майстер-сержант">
+            головний майстер-сержант
+          </option>
+          <option value="молодший лейтенант">молодший лейтенант</option>
+          <option value="лейтенант">лейтенант</option>
+          <option value="старший лейтенант">старший лейтенант</option>
+          <option value="капітан">капітан</option>
+          <option value="майор">майор</option>
+          <option value="підполковник">підполковник</option>
+          <option value="полковник">полковник</option>
+        </select>
+
+        <label for="sluzhba_type">Вид служби:</label>
+        <select id="sluzhba_type" name="sluzhba_type">
+          <option value="під час мобілізації">під час мобілізації</option>
+          <option value="за контрактом">за контрактом</option>
+        </select>
+
+        <label for="enlistment_date">Дата зарахування в списки частини:</label>
+        <select
+          id="enlistment_date"
+          name="enlistment_date"
+          required
+          onchange="toggleCustomDate()"
+        >
+          <option value="">Оберіть варіант</option>
+          <option value="з моменту призову">З моменту призову</option>
+          <option value="custom">Вказати конкретну дату</option>
+        </select>
+        <input
+          type="text"
+          id="enlistment_date_custom"
+          name="enlistment_date_custom"
+          placeholder="дд.мм.рррр"
+          pattern="\d{2}\.\d{2}\.\d{4}"
+          title="Введіть дату у форматі дд.мм.рррр"
+          style="display: none; margin-top: 10px"
+        />
+      </div>
+
+      <div class="form-section">
+        <h3>ℹ️ Інформація</h3>
+        <p style="color: #666; font-style: italic">
+          Дані командирів автоматично завантажуються з бази даних Commanders.
+        </p>
+      </div>
+
+      <div class="form-section">
+        <h3>📄 Документи до рапорту</h3>
+
+        <label for="document_type">Тип документа:</label>
+        <select
+          id="document_type"
+          name="document_type"
+          required
+          onchange="toggleDocumentFields()"
+        >
+          <option value="">Оберіть тип документа</option>
+          <option value="examination_result">Копію результату огляду</option>
+          <option value="discharge_epicrisis">Копію виписного епікризу</option>
+          <option value="vlk_decision">Копію рішення ВЛК</option>
+        </select>
+
+        <!-- Поля для результату огляду -->
+        <div
+          id="examination_fields"
+          class="document-fields"
+          style="display: none"
+        >
+          <label for="examination_number">Номер огляду:</label>
+          <input
+            type="text"
+            id="examination_number"
+            name="examination_number"
+            placeholder="Наприклад: 2025-0818-1144-0832-7"
+          />
+
+          <label for="doctor_specialty">Спеціальність лікаря:</label>
+          <select id="doctor_specialty" name="doctor_specialty">
+            <option value="">Оберіть спеціальність</option>
+            <option value="лікаря-ортопеда-травматолога">
+              лікаря-ортопеда-травматолога
+            </option>
+            <option value="лікаря-хірурга">лікаря-хірурга</option>
+            <option value="лікаря-терапевта">лікаря-терапевта</option>
+            <option value="лікаря-невролога">лікаря-невролога</option>
+            <option value="лікаря-кардіолога">лікаря-кардіолога</option>
+            <option value="лікаря-офтальмолога">лікаря-офтальмолога</option>
+            <option value="лікаря-отоларинголога">лікаря-отоларинголога</option>
+            <option value="лікаря-психіатра">лікаря-психіатра</option>
+            <option value="лікаря-ендокринолога">лікаря-ендокринолога</option>
+            <option value="лікаря-гастроентеролога">
+              лікаря-гастроентеролога
+            </option>
+          </select>
+
+          <label for="doctor_name">ПІБ лікаря:</label>
+          <input
+            type="text"
+            id="doctor_name"
+            name="doctor_name"
+            placeholder="ПІБ лікаря"
+          />
+        </div>
+
+        <!-- Поля для виписного епікризу -->
+        <div
+          id="epicrisis_fields"
+          class="document-fields"
+          style="display: none"
+        >
+          <label for="epicrisis_number">Номер виписного епікризу:</label>
+          <input
+            type="text"
+            id="epicrisis_number"
+            name="epicrisis_number"
+            placeholder="Наприклад: 2025-0818-1144-0832-7"
+          />
+        </div>
+
+        <!-- Поля для рішення ВЛК -->
+        <div
+          id="vlk_decision_fields"
+          class="document-fields"
+          style="display: none"
+        >
+          <label for="vlk_decision_number">Номер рішення ВЛК:</label>
+          <input
+            type="text"
+            id="vlk_decision_number"
+            name="vlk_decision_number"
+            placeholder="Наприклад: 2025-0818-1144-0832-7"
+          />
+        </div>
+
+        <!-- Загальні поля для всіх типів документів -->
+        <label for="document_date">Дата документа:</label>
+        <input
+          type="text"
+          id="document_date"
+          name="document_date"
+          placeholder="дд.мм.рррр"
+          pattern="\d{2}\.\d{2}\.\d{4}"
+          title="Введіть дату у форматі дд.мм.рррр"
+          required
+        />
+
+        <label for="document_issuer">Де отримали документ:</label>
+        <input
+          type="text"
+          id="document_issuer"
+          name="document_issuer"
+          placeholder="Назва закладу"
+          value='ДУ "ТМО МВС України по Запорізькій області"'
+        />
+      </div>
+
+      <input id="submit-button" type="submit" value="Створити рапорт ВЛК" />
+    </form>
+
+    <script>
+      const form = document.getElementById("generation-form");
+      const submitButton = document.getElementById("submit-button");
+      const loader = document.getElementById("loader");
+      const pibNazivnyi = document.getElementById("pib_nazivnyi");
+      const pibRodovyi = document.getElementById("pib_rodovyi");
+      const pibSuggestions = document.getElementById("pib-suggestions");
+
+      let currentSuggestions = [];
+      let selectedIndex = -1;
+
+      function getCookie(name) {
+        let a = `; ${document.cookie}`.match(`;\\s*${name}=([^;]+)`);
+        return a ? a[1] : "";
+      }
+
+      // Функція для пошуку ПІБ
+      async function searchPIB(query) {
+        if (query.length < 2) {
+          hideSuggestions();
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/api/search_pib?q=${encodeURIComponent(query)}`
+          );
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          if (data.results && data.results.length > 0) {
+            showSuggestions(data.results);
+          } else {
+            hideSuggestions();
+          }
+        } catch (error) {
+          console.error("Помилка при пошуку ПІБ:", error);
+          hideSuggestions();
+        }
+      }
+
+      // Показати пропозиції
+      function showSuggestions(suggestions) {
+        currentSuggestions = suggestions;
+        selectedIndex = -1;
+
+        pibSuggestions.innerHTML = "";
+
+        suggestions.forEach((suggestion, index) => {
+          const div = document.createElement("div");
+          div.className = "autocomplete-suggestion";
+          div.textContent = suggestion.label;
+          div.dataset.value = suggestion.value;
+          div.dataset.index = index;
+
+          div.addEventListener("click", function () {
+            selectSuggestion(suggestion);
+          });
+
+          pibSuggestions.appendChild(div);
+        });
+
+        pibSuggestions.style.display = "block";
+      }
+
+      // Приховати пропозиції
+      function hideSuggestions() {
+        pibSuggestions.style.display = "none";
+        currentSuggestions = [];
+        selectedIndex = -1;
+      }
+
+      // Вибрати пропозицію
+      function selectSuggestion(suggestion) {
+        const value =
+          typeof suggestion === "string" ? suggestion : suggestion.value;
+        const data = typeof suggestion === "object" ? suggestion : null;
+
+        pibNazivnyi.value = value;
+
+        // Очищаємо поле родового відмінку
+        pibRodovyi.value = "";
+
+        // Автозаповнення звання та дати народження якщо є дані
+        if (data && data.rank) {
+          const rankSelect = document.getElementById("zvanie");
+          if (rankSelect) {
+            // Шукаємо відповідне звання в селекті
+            for (let option of rankSelect.options) {
+              if (option.value.toLowerCase() === data.rank.toLowerCase()) {
+                rankSelect.value = option.value;
+                break;
+              }
+            }
+          }
+        }
+
+        if (data && data.birth_date) {
+          const birthDateInput = document.getElementById("birth_date");
+          if (birthDateInput && !birthDateInput.value) {
+            // Конвертуємо дату в формат дд.мм.рррр
+            try {
+              const date = new Date(data.birth_date);
+              if (!isNaN(date.getTime())) {
+                const day = String(date.getDate()).padStart(2, "0");
+                const month = String(date.getMonth() + 1).padStart(2, "0");
+                const year = date.getFullYear();
+                birthDateInput.value = `${day}.${month}.${year}`;
+              }
+            } catch (e) {
+              console.log("Не вдалося конвертувати дату народження");
+            }
+          }
+        }
+
+        hideSuggestions();
+      }
+
+      // Обробка клавіш для навігації
+      function handleKeyNavigation(e) {
+        if (pibSuggestions.style.display === "none") return;
+
+        const suggestions = pibSuggestions.querySelectorAll(
+          ".autocomplete-suggestion"
+        );
+
+        switch (e.key) {
+          case "ArrowDown":
+            e.preventDefault();
+            selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
+            updateSelection(suggestions);
+            break;
+          case "ArrowUp":
+            e.preventDefault();
+            selectedIndex = Math.max(selectedIndex - 1, -1);
+            updateSelection(suggestions);
+            break;
+          case "Enter":
+            e.preventDefault();
+            if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+              const suggestionData = currentSuggestions[selectedIndex];
+              selectSuggestion(suggestionData);
+            }
+            break;
+          case "Escape":
+            hideSuggestions();
+            break;
+        }
+      }
+
+      // Оновити виділення
+      function updateSelection(suggestions) {
+        suggestions.forEach((suggestion, index) => {
+          suggestion.classList.toggle("selected", index === selectedIndex);
+        });
+      }
+
+      // Валідація дати
+      function validateDate(dateString) {
+        const pattern = /^(\d{2})\.(\d{2})\.(\d{4})$/;
+        const match = dateString.match(pattern);
+        if (!match) return false;
+
+        const day = parseInt(match[1], 10);
+        const month = parseInt(match[2], 10);
+        const year = parseInt(match[3], 10);
+
+        if (month < 1 || month > 12) return false;
+        if (day < 1 || day > 31) return false;
+        if (year < 1900 || year > new Date().getFullYear()) return false;
+
+        const date = new Date(year, month - 1, day);
+        return (
+          date.getDate() === day &&
+          date.getMonth() === month - 1 &&
+          date.getFullYear() === year
+        );
+      }
+
+      // Функція для перемикання полів документів
+      function toggleDocumentFields() {
+        const documentType = document.getElementById("document_type").value;
+
+        // Приховуємо всі поля
+        document.getElementById("examination_fields").style.display = "none";
+        document.getElementById("epicrisis_fields").style.display = "none";
+        document.getElementById("vlk_decision_fields").style.display = "none";
+
+        // Показуємо відповідні поля
+        if (documentType === "examination_result") {
+          document.getElementById("examination_fields").style.display = "block";
+        } else if (documentType === "discharge_epicrisis") {
+          document.getElementById("epicrisis_fields").style.display = "block";
+        } else if (documentType === "vlk_decision") {
+          document.getElementById("vlk_decision_fields").style.display =
+            "block";
+        }
+      }
+
+      // Автозаповнення родового відмінку та пошук ПІБ
+      let searchTimeout;
+
+      pibNazivnyi.addEventListener("input", function () {
+        // Очищаємо поле родового відмінку при зміні ПІБ
+        pibRodovyi.value = "";
+
+        // Пошук ПІБ з затримкою
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+          searchPIB(pibNazivnyi.value);
+        }, 300);
+      });
+
+      // Обробка клавіш для навігації
+      pibNazivnyi.addEventListener("keydown", handleKeyNavigation);
+
+      // Приховати пропозиції при кліку поза полем
+      document.addEventListener("click", function (e) {
+        if (
+          !pibNazivnyi.contains(e.target) &&
+          !pibSuggestions.contains(e.target)
+        ) {
+          hideSuggestions();
+        }
+      });
+
+      // Валідація поля дати призову (select)
+      document
+        .getElementById("enlistment_date")
+        .addEventListener("change", function () {
+          if (!this.value) {
+            this.setCustomValidity("Оберіть варіант дати призову");
+          } else if (
+            this.value === "з моменту призову" ||
+            this.value === "custom"
+          ) {
+            this.setCustomValidity("");
+          } else {
+            this.setCustomValidity("Оберіть валідний варіант");
+          }
+        });
+
+      document
+        .getElementById("birth_date")
+        .addEventListener("blur", function () {
+          if (this.value && !validateDate(this.value)) {
+            this.setCustomValidity(
+              "Введіть коректну дату у форматі дд.мм.рррр"
+            );
+          } else {
+            this.setCustomValidity("");
+          }
+        });
+
+      document
+        .getElementById("document_date")
+        .addEventListener("blur", function () {
+          if (this.value && !validateDate(this.value)) {
+            this.setCustomValidity(
+              "Введіть коректну дату у форматі дд.мм.рррр"
+            );
+          } else {
+            this.setCustomValidity("");
+          }
+        });
+
+      // Валідація для поля кастомної дати призову
+      document
+        .getElementById("enlistment_date_custom")
+        .addEventListener("blur", function () {
+          if (this.value && !validateDate(this.value)) {
+            this.setCustomValidity(
+              "Введіть коректну дату у форматі дд.мм.рррр"
+            );
+          } else {
+            this.setCustomValidity("");
+          }
+        });
+
+      form.addEventListener("submit", function () {
+        // Додаткова валідація для поля дати призову
+        const enlistmentSelect = document.getElementById("enlistment_date");
+        const customInput = document.getElementById("enlistment_date_custom");
+
+        if (enlistmentSelect.value === "custom" && !customInput.value) {
+          customInput.setCustomValidity("Вкажіть конкретну дату");
+          customInput.reportValidity();
+          return false;
+        }
+
+        if (form.checkValidity()) {
+          loader.style.display = "flex";
+          submitButton.disabled = true;
+
+          let cookieCheck = setInterval(function () {
+            if (getCookie("fileDownload") === "true") {
+              clearInterval(cookieCheck);
+              loader.style.display = "none";
+              submitButton.disabled = false;
+              document.cookie =
+                "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            }
+          }, 500);
+        }
+      });
+
+      // Ініціалізація валідації при завантаженні сторінки
+      document.addEventListener("DOMContentLoaded", function () {
+        const enlistmentSelect = document.getElementById("enlistment_date");
+        if (enlistmentSelect.value) {
+          toggleCustomDate();
+        }
+      });
+
+      // Функція для перемикання між варіантами дати призову
+      function toggleCustomDate() {
+        const select = document.getElementById("enlistment_date");
+        const customInput = document.getElementById("enlistment_date_custom");
+
+        if (select.value === "custom") {
+          customInput.style.display = "block";
+          customInput.required = true;
+          // Очищаємо валідацію select, оскільки тепер потрібна валідація custom поля
+          select.setCustomValidity("");
+        } else {
+          customInput.style.display = "none";
+          customInput.required = false;
+          customInput.value = "";
+          customInput.setCustomValidity("");
+          // Валідуємо select
+          if (!select.value) {
+            select.setCustomValidity("Оберіть варіант дати призову");
+          } else if (
+            select.value === "з моменту призову" ||
+            select.value === "custom"
+          ) {
+            select.setCustomValidity("");
+          } else {
+            select.setCustomValidity("Оберіть валідний варіант");
+          }
+        }
+      }
+    </script>
+  </body>
+</html>

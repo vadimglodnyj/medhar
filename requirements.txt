@@ -1,0 +1,7 @@
+numpy==1.26.4
+Flask==2.3.3
+pandas==2.1.1
+python-docx==0.8.11
+docxtpl==0.16.7
+openpyxl==3.1.2
+Werkzeug==2.3.7
