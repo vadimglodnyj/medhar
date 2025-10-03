@@ -50,6 +50,14 @@ ukr.traineddata
 database/
 medical_new.db
 
+# Documentation and logs
+docs/database/
+docs/migration/
+docs/scripts/
+*.log
+import_log.txt
+medical_import_log.txt
+
 # Environment variables
 .env
 .env.local
