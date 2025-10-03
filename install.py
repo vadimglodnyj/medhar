@@ -18,59 +18,75 @@ def check_python_version():
     print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     return True
 
-def install_requirements():
-    """Встановлює залежності з requirements.txt"""
-    print("📦 Встановлення залежностей...")
+def install_core_packages():
+    """Встановлює основні пакети по одному"""
+    print("📦 Встановлення основних пакетів...")
     
-    if not os.path.exists("requirements.txt"):
-        print("❌ Файл requirements.txt не знайдено!")
+    # Список основних пакетів в порядку залежностей
+    packages = [
+        "setuptools",
+        "wheel", 
+        "pip",
+        "numpy",
+        "Flask",
+        "pandas",
+        "python-docx",
+        "docxtpl",
+        "openpyxl",
+        "Werkzeug",
+        "requests",
+        "beautifulsoup4",
+        "python-dotenv"
+    ]
+    
+    failed_packages = []
+    
+    for package in packages:
+        try:
+            print(f"📦 Встановлення {package}...")
+            result = subprocess.run([
+                sys.executable, "-m", "pip", "install", 
+                package, "--upgrade", "--no-cache-dir"
+            ], check=True, capture_output=True, text=True)
+            print(f"✅ {package} встановлено успішно")
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Помилка встановлення {package}: {e}")
+            if e.stderr:
+                print(f"STDERR: {e.stderr}")
+            failed_packages.append(package)
+    
+    if failed_packages:
+        print(f"⚠️  Не вдалося встановити: {', '.join(failed_packages)}")
         return False
     
-    try:
-        # Оновлюємо pip
-        print("🔄 Оновлення pip...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], 
-                      check=True, capture_output=True)
-        
-        # Встановлюємо setuptools та wheel
-        print("🔧 Встановлення базових інструментів...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "setuptools", "wheel"], 
-                      check=True, capture_output=True)
-        
-        # Встановлюємо залежності з обробкою помилок
-        print("📥 Встановлення пакетів...")
-        result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--no-cache-dir"], 
-                               check=True, capture_output=True, text=True)
-        
-        print("✅ Залежності встановлено успішно!")
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Помилка встановлення: {e}")
-        if e.stdout:
-            print("STDOUT:", e.stdout)
-        if e.stderr:
-            print("STDERR:", e.stderr)
-        
-        # Спробуємо встановити основні пакети окремо
-        print("🔄 Спробуємо встановити основні пакети окремо...")
+    print("✅ Всі основні пакети встановлено успішно!")
+    return True
+
+def install_optional_packages():
+    """Встановлює опціональні пакети"""
+    print("📦 Встановлення опціональних пакетів...")
+    
+    optional_packages = [
+        "pdf2image",
+        "pypdf", 
+        "Pillow",
+        "easyocr",
+        "pytesseract"
+    ]
+    
+    for package in optional_packages:
         try:
-            core_packages = [
-                "numpy", "Flask", "pandas", "python-docx", "docxtpl", 
-                "openpyxl", "Werkzeug", "requests", "beautifulsoup4", "python-dotenv"
-            ]
+            print(f"📦 Встановлення {package}...")
+            subprocess.run([
+                sys.executable, "-m", "pip", "install", 
+                package, "--upgrade", "--no-cache-dir"
+            ], check=True, capture_output=True)
+            print(f"✅ {package} встановлено успішно")
             
-            for package in core_packages:
-                print(f"📦 Встановлення {package}...")
-                subprocess.run([sys.executable, "-m", "pip", "install", package], 
-                              check=True, capture_output=True)
-            
-            print("✅ Основні пакети встановлено успішно!")
-            return True
-            
-        except subprocess.CalledProcessError as e2:
-            print(f"❌ Помилка встановлення основних пакетів: {e2}")
-            return False
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️  Не вдалося встановити {package} (опціональний): {e}")
+            print("Продовжуємо без цього пакета...")
 
 def check_system_requirements():
     """Перевіряє системні вимоги"""
@@ -126,9 +142,22 @@ def main():
     if not create_virtual_environment():
         return 1
     
-    # Встановлюємо залежності
-    if not install_requirements():
+    # Оновлюємо pip
+    try:
+        print("🔄 Оновлення pip...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], 
+                      check=True, capture_output=True)
+        print("✅ pip оновлено")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️  Не вдалося оновити pip: {e}")
+    
+    # Встановлюємо основні пакети
+    if not install_core_packages():
+        print("❌ Не вдалося встановити основні пакети")
         return 1
+    
+    # Встановлюємо опціональні пакети
+    install_optional_packages()
     
     print("\n🎉 ВСТАНОВЛЕННЯ ЗАВЕРШЕНО!")
     print("=" * 50)
