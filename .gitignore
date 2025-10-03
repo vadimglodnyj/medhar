@@ -58,6 +58,11 @@ docs/scripts/
 import_log.txt
 medical_import_log.txt
 
+# Test files
+tests/
+test_*.xlsx
+test_*.py
+
 # Environment variables
 .env
 .env.local
