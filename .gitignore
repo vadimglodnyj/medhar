@@ -42,3 +42,12 @@ backup/
 output/
 data/*.xlsx
 ukr.traineddata
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.staging
+
+# Upload files
+uploads/

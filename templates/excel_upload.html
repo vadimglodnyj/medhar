@@ -1,0 +1,548 @@
+{% extends "base.html" %} {% block title %}Завантаження Excel - МедХар{%
+endblock %} {% block extra_css %}
+<style>
+  .upload-area {
+    border: 2px dashed #007bff;
+    border-radius: 10px;
+    padding: 40px;
+    text-align: center;
+    background-color: #f8f9fa;
+    transition: all 0.3s ease;
+  }
+  .upload-area:hover {
+    border-color: #0056b3;
+    background-color: #e3f2fd;
+  }
+  .upload-area.dragover {
+    border-color: #28a745;
+    background-color: #d4edda;
+  }
+  .file-list {
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  .progress-container {
+    display: none;
+  }
+  .file-item {
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    padding: 10px;
+    margin-bottom: 10px;
+    background-color: #f8f9fa;
+  }
+  .file-item.processed {
+    background-color: #d4edda;
+    border-color: #28a745;
+  }
+  .file-item.error {
+    background-color: #f8d7da;
+    border-color: #dc3545;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="container-fluid">
+  <div class="row">
+    <!-- Бічна панель -->
+    <div class="col-md-3 bg-light p-3">
+      <h5><i class="fas fa-upload"></i> Завантаження Excel</h5>
+      <hr />
+
+      <!-- Форма завантаження -->
+      <div class="upload-area" id="uploadArea">
+        <i class="fas fa-cloud-upload-alt fa-3x text-primary mb-3"></i>
+        <h5>Перетягніть файли сюди</h5>
+        <p class="text-muted">або натисніть для вибору файлів</p>
+        <input
+          type="file"
+          id="fileInput"
+          multiple
+          accept=".xlsx,.xls"
+          style="display: none"
+        />
+        <button
+          class="btn btn-primary"
+          onclick="document.getElementById('fileInput').click()"
+        >
+          <i class="fas fa-folder-open"></i> Вибрати файли
+        </button>
+      </div>
+
+      <hr />
+
+      <!-- Кнопки дій -->
+      <div class="d-grid gap-2">
+        <div class="form-check text-start mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            value=""
+            id="importToDb"
+          />
+          <label class="form-check-label" for="importToDb"
+            >Завантажувати в БД</label
+          >
+        </div>
+        <button class="btn btn-success" id="processBtn" disabled>
+          <i class="fas fa-cogs"></i> Обробити файли
+        </button>
+        <button class="btn btn-warning" id="clearBtn">
+          <i class="fas fa-trash"></i> Очистити список
+        </button>
+        <button class="btn btn-info" id="refreshBtn">
+          <i class="fas fa-sync"></i> Оновити список
+        </button>
+      </div>
+
+      <hr />
+
+      <!-- Статистика -->
+      <div class="card">
+        <div class="card-header">
+          <h6><i class="fas fa-chart-bar"></i> Статистика</h6>
+        </div>
+        <div class="card-body">
+          <div class="row text-center">
+            <div class="col-6">
+              <div class="h4 text-primary" id="totalFiles">0</div>
+              <small class="text-muted">Файлів</small>
+            </div>
+            <div class="col-6">
+              <div class="h4 text-success" id="processedFiles">0</div>
+              <small class="text-muted">Оброблено</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Основна область -->
+    <div class="col-md-9">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4><i class="fas fa-file-excel"></i> Список файлів</h4>
+        <div class="btn-group">
+          <button class="btn btn-outline-primary btn-sm" id="viewModeBtn">
+            <i class="fas fa-th"></i> Сітка
+          </button>
+          <button class="btn btn-outline-primary btn-sm" id="listModeBtn">
+            <i class="fas fa-list"></i> Список
+          </button>
+        </div>
+      </div>
+
+      <!-- Прогрес -->
+      <div class="progress-container mb-3">
+        <div class="progress">
+          <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+        </div>
+        <div class="text-center mt-2">
+          <span id="progressText">Готово до обробки</span>
+        </div>
+      </div>
+
+      <!-- Список файлів -->
+      <div class="file-list" id="fileList">
+        <div class="text-center text-muted py-5">
+          <i class="fas fa-file-excel fa-3x mb-3"></i>
+          <p>Немає файлів для обробки</p>
+          <p class="small">Завантажте Excel файли для початку роботи</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Модальне вікно для деталей -->
+<div class="modal fade" id="fileDetailsModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Деталі файлу</h5>
+        <button
+          type="button"
+          class="btn-close"
+          data-bs-dismiss="modal"
+        ></button>
+      </div>
+      <div class="modal-body" id="fileDetailsContent">
+        <!-- Деталі файлу будуть завантажені тут -->
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+          Закрити
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %} {% block extra_js %}
+<script>
+  let files = [];
+  let viewMode = "grid"; // 'grid' або 'list'
+
+  // Елементи DOM
+  const uploadArea = document.getElementById("uploadArea");
+  const fileInput = document.getElementById("fileInput");
+  const fileList = document.getElementById("fileList");
+  const processBtn = document.getElementById("processBtn");
+  const clearBtn = document.getElementById("clearBtn");
+  const refreshBtn = document.getElementById("refreshBtn");
+  const progressContainer = document.querySelector(".progress-container");
+  const progressBar = document.querySelector(".progress-bar");
+  const progressText = document.getElementById("progressText");
+  const totalFiles = document.getElementById("totalFiles");
+  const processedFiles = document.getElementById("processedFiles");
+
+  // Обробка перетягування файлів
+  uploadArea.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    uploadArea.classList.add("dragover");
+  });
+
+  uploadArea.addEventListener("dragleave", () => {
+    uploadArea.classList.remove("dragover");
+  });
+
+  uploadArea.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove("dragover");
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    addFiles(droppedFiles);
+  });
+
+  // Обробка вибору файлів
+  fileInput.addEventListener("change", (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    addFiles(selectedFiles);
+  });
+
+  // Додавання файлів
+  function addFiles(newFiles) {
+    const excelFiles = newFiles.filter(
+      (file) =>
+        file.name.toLowerCase().endsWith(".xlsx") ||
+        file.name.toLowerCase().endsWith(".xls")
+    );
+
+    if (excelFiles.length === 0) {
+      alert("Будь ласка, виберіть Excel файли (.xlsx або .xls)");
+      return;
+    }
+
+    excelFiles.forEach((file) => {
+      if (!files.find((f) => f.name === file.name && f.size === file.size)) {
+        files.push({
+          id: Date.now() + Math.random(),
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          file: file,
+          status: "pending",
+          processed: false,
+          error: null,
+          details: null,
+        });
+      }
+    });
+
+    updateFileList();
+    updateStatistics();
+  }
+
+  // Оновлення списку файлів
+  function updateFileList() {
+    if (files.length === 0) {
+      fileList.innerHTML = `
+                    <div class="text-center text-muted py-5">
+                        <i class="fas fa-file-excel fa-3x mb-3"></i>
+                        <p>Немає файлів для обробки</p>
+                        <p class="small">Завантажте Excel файли для початку роботи</p>
+                    </div>
+                `;
+      return;
+    }
+
+    const html = files
+      .map((file) => {
+        const statusIcon = getStatusIcon(file.status);
+        const statusClass = getStatusClass(file.status);
+        const sizeText = formatFileSize(file.size);
+
+        return `
+                    <div class="file-item ${statusClass}" data-file-id="${
+          file.id
+        }">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-file-excel text-success me-2"></i>
+                                <div>
+                                    <div class="fw-bold">${file.name}</div>
+                                    <small class="text-muted">${sizeText}</small>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center">
+                                <span class="badge ${statusClass} me-2">${statusIcon}</span>
+                                <button class="btn btn-sm btn-outline-primary" onclick="showFileDetails('${
+                                  file.id
+                                }')">
+                                    <i class="fas fa-info-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+                        ${
+                          file.error
+                            ? `<div class="text-danger small mt-2">${file.error}</div>`
+                            : ""
+                        }
+                    </div>
+                `;
+      })
+      .join("");
+
+    fileList.innerHTML = html;
+  }
+
+  // Отримання іконки статусу
+  function getStatusIcon(status) {
+    switch (status) {
+      case "pending":
+        return '<i class="fas fa-clock"></i> Очікує';
+      case "processing":
+        return '<i class="fas fa-spinner fa-spin"></i> Обробка';
+      case "success":
+        return '<i class="fas fa-check"></i> Успішно';
+      case "error":
+        return '<i class="fas fa-times"></i> Помилка';
+      default:
+        return '<i class="fas fa-question"></i> Невідомо';
+    }
+  }
+
+  // Отримання класу статусу
+  function getStatusClass(status) {
+    switch (status) {
+      case "pending":
+        return "";
+      case "processing":
+        return "bg-warning";
+      case "success":
+        return "processed";
+      case "error":
+        return "error";
+      default:
+        return "";
+    }
+  }
+
+  // Форматування розміру файлу
+  function formatFileSize(bytes) {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  }
+
+  // Оновлення статистики
+  function updateStatistics() {
+    totalFiles.textContent = files.length;
+    const processed = files.filter((f) => f.status === "success").length;
+    processedFiles.textContent = processed;
+
+    // Оновлення кнопки обробки
+    const hasPendingFiles = files.some((f) => f.status === "pending");
+    processBtn.disabled = !hasPendingFiles;
+  }
+
+  // Показ деталей файлу
+  function showFileDetails(fileId) {
+    const file = files.find((f) => f.id === fileId);
+    if (!file) return;
+
+    const content = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Основна інформація</h6>
+                        <table class="table table-sm">
+                            <tr><td>Назва:</td><td>${file.name}</td></tr>
+                            <tr><td>Розмір:</td><td>${formatFileSize(
+                              file.size
+                            )}</td></tr>
+                            <tr><td>Тип:</td><td>${file.type}</td></tr>
+                            <tr><td>Статус:</td><td>${getStatusIcon(
+                              file.status
+                            )}</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Деталі обробки</h6>
+                        ${
+                          file.details
+                            ? `
+                            <table class="table table-sm">
+                                <tr><td>Записів:</td><td>${
+                                  file.details.records || "Н/Д"
+                                }</td></tr>
+                                <tr><td>Колонок:</td><td>${
+                                  file.details.columns || "Н/Д"
+                                }</td></tr>
+                                <tr><td>Час обробки:</td><td>${
+                                  file.details.processingTime || "Н/Д"
+                                }</td></tr>
+                            </table>
+                            ${
+                              file.details.importSummary
+                                ? `
+                              <table class="table table-sm">
+                                <tr><td>Вставлено:</td><td>${file.details.importSummary.inserted}</td></tr>
+                                <tr><td>Оновлено:</td><td>${file.details.importSummary.updated}</td></tr>
+                                <tr><td>Пропущено:</td><td>${file.details.importSummary.skipped}</td></tr>
+                              </table>
+                            `
+                                : ""
+                            }
+                            ${
+                              file.details.inferredMapping
+                                ? `
+                              <h6 class="mt-3">Мапінг колонок</h6>
+                              <table class="table table-sm">
+                                ${Object.entries(file.details.inferredMapping)
+                                  .map(
+                                    ([k, v]) => `
+                                  <tr><td>${k}</td><td>${v || ""}</td></tr>
+                                `
+                                  )
+                                  .join("")}
+                              </table>
+                            `
+                                : ""
+                            }
+                        `
+                            : '<p class="text-muted">Файл ще не оброблено</p>'
+                        }
+                    </div>
+                </div>
+                ${
+                  file.details && file.details.sampleRows
+                    ? `
+                  <div class="mt-3">
+                    <h6>Перші рядки</h6>
+                    <div class="table-responsive">
+                      <table class="table table-bordered table-sm">
+                        <thead>
+                          <tr>${Object.keys(file.details.sampleRows[0] || {})
+                            .map((col) => `<th>${col}</th>`)
+                            .join("")}</tr>
+                        </thead>
+                        <tbody>
+                          ${file.details.sampleRows
+                            .map(
+                              (r) => `
+                            <tr>${Object.values(r)
+                              .map((val) => `<td>${val ?? ""}</td>`)
+                              .join("")}</tr>
+                          `
+                            )
+                            .join("")}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                `
+                    : ""
+                }
+                ${
+                  file.error
+                    ? `
+                    <div class="alert alert-danger mt-3">
+                        <strong>Помилка:</strong> ${file.error}
+                    </div>
+                `
+                    : ""
+                }
+            `;
+
+    document.getElementById("fileDetailsContent").innerHTML = content;
+    new bootstrap.Modal(document.getElementById("fileDetailsModal")).show();
+  }
+
+  // Обробка файлів
+  async function processFiles() {
+    const pendingFiles = files.filter((f) => f.status === "pending");
+    if (pendingFiles.length === 0) return;
+
+    progressContainer.style.display = "block";
+    processBtn.disabled = true;
+
+    for (let i = 0; i < pendingFiles.length; i++) {
+      const file = pendingFiles[i];
+      file.status = "processing";
+      updateFileList();
+
+      const progress = ((i + 1) / pendingFiles.length) * 100;
+      progressBar.style.width = progress + "%";
+      progressText.textContent = `Обробка файлу ${i + 1} з ${
+        pendingFiles.length
+      }: ${file.name}`;
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file.file);
+        const importToDb = document.getElementById("importToDb").checked;
+        formData.append("import_to_db", importToDb ? "true" : "false");
+
+        const response = await fetch("/api/upload_excel", {
+          method: "POST",
+          body: formData,
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          file.status = "success";
+          file.details = result.details;
+        } else {
+          file.status = "error";
+          file.error = result.error;
+        }
+      } catch (error) {
+        file.status = "error";
+        file.error = "Помилка завантаження: " + error.message;
+      }
+
+      updateFileList();
+      updateStatistics();
+    }
+
+    progressContainer.style.display = "none";
+    processBtn.disabled = false;
+    progressText.textContent = "Готово до обробки";
+  }
+
+  // Очищення списку
+  function clearFiles() {
+    if (confirm("Ви впевнені, що хочете очистити список файлів?")) {
+      files = [];
+      updateFileList();
+      updateStatistics();
+    }
+  }
+
+  // Оновлення списку
+  function refreshFiles() {
+    // Тут можна додати логіку для оновлення списку з сервера
+    updateFileList();
+    updateStatistics();
+  }
+
+  // Обробники подій
+  processBtn.addEventListener("click", processFiles);
+  clearBtn.addEventListener("click", clearFiles);
+  refreshBtn.addEventListener("click", refreshFiles);
+
+  // Ініціалізація
+  updateFileList();
+  updateStatistics();
+</script>
+{% endblock %}

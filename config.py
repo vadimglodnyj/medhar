@@ -18,7 +18,7 @@ TREATMENTS_2024_FILE = os.path.join(DATA_DIR, 'treatments_2024.xlsx')
 TREATMENTS_2025_FILE = os.path.join(DATA_DIR, 'treatments_2025.xlsx')
 TREATMENTS_ADAPTED_FILE = os.path.join(DATA_DIR, 'treatments_adapted.xlsx')
 TREATMENTS_CLEANED_FILE = os.path.join(DATA_DIR, 'treatments_cleaned.xlsx')
-TREATMENTS_FINAL_FILE = os.path.join(DATA_DIR, 'treatments_final_perfect.xlsx')
+TREATMENTS_FINAL_FILE = os.path.join(DATA_DIR, 'treatments_final.xlsx')
 
 # Шаблони документів
 MEDICAL_CHARACTERISTIC_TEMPLATE = os.path.join(TEMPLATES_DIR, 'medical_characteristic_template.docx')

@@ -1,0 +1,527 @@
+{% extends "base.html" %} {% block title %}Звіти по виплатах - МедХар{% endblock
+%} {% block extra_css %}
+<style>
+  .card-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+  }
+  .search-container {
+    background: #f8f9fa;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .table-responsive {
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  }
+  /* Autocomplete */
+  .autocomplete-wrapper {
+    position: relative;
+  }
+  .autocomplete-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-top: none;
+    max-height: 280px;
+    overflow-y: auto;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+  }
+  .autocomplete-item {
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+  .autocomplete-item:hover,
+  .autocomplete-item.active {
+    background: #f1f5ff;
+  }
+  /* Фіксуємо ширину колонки діагнозу та переносимо текст */
+  .diagnosis-col {
+    width: 40%;
+    max-width: 0; /* для table-layout: auto забезпечує обмеження ширини */
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="container-fluid">
+  <!-- Пошук історії виплат пацієнта -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h5>
+            <i class="fas fa-search me-2"></i>Пошук історії виплат пацієнта
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="search-container">
+            <div class="row">
+              <div class="col-md-8">
+                <div class="autocomplete-wrapper">
+                  <input
+                    type="text"
+                    id="patientSearch"
+                    class="form-control"
+                    placeholder="Введіть ПІБ пацієнта для пошуку історії виплат..."
+                    autocomplete="off"
+                  />
+                  <div
+                    id="autocompleteList"
+                    class="autocomplete-list d-none"
+                  ></div>
+                </div>
+              </div>
+              <div class="col-md-4">
+                <button
+                  type="button"
+                  id="searchPatient"
+                  class="btn btn-custom w-100"
+                >
+                  <i class="fas fa-search me-2"></i>Пошук
+                </button>
+              </div>
+            </div>
+            <div id="searchResults" class="mt-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %} {% block extra_js %}
+<script>
+  // Autocomplete
+  (function () {
+    const input = document.getElementById("patientSearch");
+    const list = document.getElementById("autocompleteList");
+    let items = [];
+    let activeIdx = -1;
+    let debounceTimer = null;
+
+    function hideList() {
+      list.classList.add("d-none");
+      list.innerHTML = "";
+      activeIdx = -1;
+      items = [];
+    }
+    function renderList(results) {
+      if (!results || results.length === 0) {
+        hideList();
+        return;
+      }
+      list.innerHTML = results
+        .map(
+          (r, i) => `
+        <div class="autocomplete-item${
+          i === 0 ? " active" : ""
+        }" data-idx="${i}" data-value="${r.value}">
+          ${r.label}
+        </div>
+      `
+        )
+        .join("");
+      items = results;
+      activeIdx = 0;
+      list.classList.remove("d-none");
+    }
+    function setActive(idx) {
+      const children = Array.from(list.children);
+      children.forEach((el) => el.classList.remove("active"));
+      if (idx >= 0 && idx < children.length) {
+        children[idx].classList.add("active");
+        activeIdx = idx;
+      }
+    }
+    function pick(idx) {
+      if (idx < 0 || idx >= items.length) return;
+      input.value = items[idx].value;
+      hideList();
+    }
+    input.addEventListener("input", () => {
+      const q = input.value.trim();
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (q.length < 2) {
+        hideList();
+        return;
+      }
+      debounceTimer = setTimeout(async () => {
+        try {
+          const resp = await fetch(
+            `/api/search_pib?q=${encodeURIComponent(q)}`
+          );
+          const data = await resp.json();
+          renderList(Array.isArray(data.results) ? data.results : []);
+        } catch {
+          hideList();
+        }
+      }, 200);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (list.classList.contains("d-none")) return;
+      const max = items.length;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActive(Math.min(activeIdx + 1, max - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive(Math.max(activeIdx - 1, 0));
+      } else if (e.key === "Enter") {
+        if (activeIdx >= 0) {
+          e.preventDefault();
+          pick(activeIdx);
+        }
+      } else if (e.key === "Escape") {
+        hideList();
+      }
+    });
+    list.addEventListener("mousedown", (e) => {
+      const el = e.target.closest(".autocomplete-item");
+      if (!el) return;
+      pick(parseInt(el.getAttribute("data-idx"), 10));
+    });
+    document.addEventListener("click", (e) => {
+      if (!list.contains(e.target) && e.target !== input) {
+        hideList();
+      }
+    });
+  })();
+
+  // Пошук пацієнта
+  document
+    .getElementById("searchPatient")
+    .addEventListener("click", async function () {
+      const patientName = document.getElementById("patientSearch").value.trim();
+      if (!patientName) {
+        alert("Введіть ПІБ пацієнта");
+        return;
+      }
+
+      const resultsDiv = document.getElementById("searchResults");
+      resultsDiv.innerHTML =
+        '<div class="text-center"><i class="fas fa-spinner fa-spin"></i> Пошук...</div>';
+
+      try {
+        const response = await fetch(
+          `/api/search_patient_payments?name=${encodeURIComponent(patientName)}`
+        );
+        const data = await response.json();
+
+        if (data.error) {
+          resultsDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+          return;
+        }
+
+        if (!data.patient) {
+          resultsDiv.innerHTML =
+            '<div class="alert alert-info">Результатів не знайдено</div>';
+          return;
+        }
+
+        let html = '<div class="patient-search-results">';
+
+        // Інформація про пацієнта
+        html += `
+          <div class="card mb-3">
+            <div class="card-header bg-info text-white">
+              <h6 class="mb-0"><i class="fas fa-user me-2"></i>Інформація про пацієнта</h6>
+            </div>
+            <div class="card-body">
+              <div class="row">
+                <div class="col-md-4"><strong>ПІБ:</strong> ${data.patient.full_name}</div>
+                <div class="col-md-4"><strong>Звання:</strong> ${data.patient.rank}</div>
+                <div class="col-md-4"><strong>Підрозділ:</strong> ${data.patient.unit_name}</div>
+              </div>
+            </div>
+          </div>
+        `;
+
+        const formatDate = (dateStr) => {
+          if (!dateStr) return "по теперішній час";
+          const d1 = Date.parse(dateStr);
+          if (!isNaN(d1)) return new Date(dateStr).toLocaleDateString("uk-UA");
+          // try YYYY-MM-DD only
+          const m = /^\d{4}-\d{2}-\d{2}$/.exec(String(dateStr));
+          if (m) {
+            const d2 = Date.parse(String(dateStr) + "T00:00:00");
+            if (!isNaN(d2))
+              return new Date(String(dateStr) + "T00:00:00").toLocaleDateString(
+                "uk-UA"
+              );
+          }
+          // try DD.MM.YYYY
+          const m2 = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(dateStr));
+          if (m2) {
+            return `${m2[1]}.${m2[2]}.${m2[3]}`;
+          }
+          return "Н/Д";
+        };
+
+        // Невелика зведена статистика по пацієнту (за наявності даних)
+        const payments = Array.isArray(data.payments) ? data.payments : [];
+        const treatmentsRaw = Array.isArray(data.treatments)
+          ? data.treatments
+          : [];
+
+        // Фільтри: медрота/медпункт/ОТУ та амбулаторні не враховуємо у списку
+        const EXCLUDED_PLACES = [
+          "медична рота 3029",
+          "медичний пункт бригади",
+          "оту харків",
+        ];
+        const EXCLUDED_TYPES = [
+          "амбулаторно",
+          "амбулаторне",
+          "стабілізаційний пункт",
+        ];
+
+        const normalizePlace = (p) => {
+          if (!p) return "";
+          const s = String(p)
+            .replace(/[«»“”"']/g, '"')
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+          return s;
+        };
+
+        const toDate = (v) => (v ? new Date(v) : null);
+        const atMidnight = (d) => {
+          if (!d) return null;
+          const dt = new Date(d);
+          dt.setHours(0, 0, 0, 0);
+          return dt;
+        };
+        const addDays = (d, n) => {
+          const dt = new Date(d);
+          dt.setDate(dt.getDate() + n);
+          return dt;
+        };
+        const toYmd = (v) => {
+          const d = toDate(v);
+          if (!d || isNaN(d)) return "";
+          const mm = String(d.getMonth() + 1).padStart(2, "0");
+          const dd = String(d.getDate()).padStart(2, "0");
+          return `${d.getFullYear()}-${mm}-${dd}`;
+        };
+        const hasOverlap = (aStart, aEnd, bStart, bEnd) => {
+          // Interpret payment_end as exclusive; treatment_end as inclusive
+          if (!aStart || !bStart) return false;
+          const tS = atMidnight(aStart).getTime();
+          const tEex = aEnd
+            ? addDays(atMidnight(aEnd), 1).getTime()
+            : Number.POSITIVE_INFINITY;
+          const pS = atMidnight(bStart).getTime();
+          const pEex = bEnd
+            ? atMidnight(bEnd).getTime()
+            : atMidnight(bStart).getTime(); // exclusive
+          // Strict inequality for non-zero overlap
+          return Math.max(tS, pS) < Math.min(tEex, pEex);
+        };
+
+        // Дедуплікація лікувань за ключем (normalized start|end|place)
+        const keyOf = (t) => {
+          const s = toYmd(
+            t.primary_hospitalization_date || t.current_hospitalization_date
+          );
+          const e = toYmd(t.discharge_date);
+          const p = normalizePlace(t.hospital_place || "");
+          return `${s}|${e}|${p}`;
+        };
+        const seen = new Set();
+        const treatments = [];
+        for (const t of treatmentsRaw) {
+          const placeNorm = normalizePlace(t.hospital_place || "");
+          const typeNorm = String(t.treatment_type || "").toLowerCase();
+          const isExcludedPlace = EXCLUDED_PLACES.some((x) =>
+            placeNorm.includes(x)
+          );
+          const isExcludedType = EXCLUDED_TYPES.includes(typeNorm);
+          if (isExcludedPlace || isExcludedType) continue;
+          const k = keyOf(t);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          treatments.push(t);
+        }
+        if (payments.length > 0 || treatments.length > 0) {
+          const totalPaidDays = payments.reduce(
+            (sum, p) => sum + (p.treatment_days || 0),
+            0
+          );
+          const lastPayment = payments
+            .slice()
+            .sort(
+              (a, b) =>
+                new Date(b.payment_end_date) - new Date(a.payment_end_date)
+            )[0];
+
+          html += `
+            <div class="card mb-3">
+              <div class="card-header bg-primary text-white">
+                <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>Загальна статистика по пацієнту</h6>
+              </div>
+              <div class="card-body">
+                <div class="row text-center">
+                  <div class="col-md-3">
+                    <h4 class="text-primary">${totalPaidDays}</h4>
+                    <small class="text-muted">Оплачені дні</small>
+                  </div>
+                  <div class="col-md-3">
+                    <h4 class="text-success">${payments.length}</h4>
+                    <small class="text-muted">Кількість оплат</small>
+                  </div>
+                  <div class="col-md-3">
+                    <h4 class="text-info">${treatments.length}</h4>
+                    <small class="text-muted">Кількість лікувань</small>
+                  </div>
+                  <div class="col-md-3">
+                    <h6 class="text-secondary">${
+                      lastPayment
+                        ? formatDate(lastPayment.payment_end_date)
+                        : "Н/Д"
+                    }</h6>
+                    <small class="text-muted">Остання оплата</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        // (helper hasOverlap already defined above)
+
+        // Лікування з позначкою оплати
+        if (treatments.length > 0) {
+          html += `
+            <div class="card mb-3">
+              <div class="card-header bg-success text-white">
+                <h6 class="mb-0"><i class="fas fa-hospital me-2"></i>Лікування (${treatments.length})</h6>
+              </div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-striped">
+                    <thead>
+                      <tr>
+                        <th>Період лікування</th>
+                        <th>Тип · Місце</th>
+                        <th class="diagnosis-col">Діагноз</th>
+                        <th>Оплата</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+          `;
+
+          treatments.forEach((t) => {
+            const tStart = toDate(
+              t.primary_hospitalization_date || t.current_hospitalization_date
+            );
+            const tEnd = toDate(t.discharge_date);
+            const sText = formatDate(
+              t.primary_hospitalization_date || t.current_hospitalization_date
+            );
+            const eText = formatDate(t.discharge_date);
+            const period = `${sText} - ${eText}`;
+            const typeText = (t.treatment_type || "").toString().trim();
+            const place =
+              (typeText ? `${typeText}: ` : "") + (t.hospital_place || "Н/Д");
+            const dxRaw = (
+              t.preliminary_diagnosis ||
+              t.final_diagnosis ||
+              ""
+            ).toString();
+            const dx = dxRaw
+              ? dxRaw.substring(0, 140) + (dxRaw.length > 140 ? "…" : "")
+              : "Н/Д";
+
+            const matched = payments.filter((p) =>
+              hasOverlap(
+                tStart,
+                tEnd,
+                toDate(p.payment_start_date),
+                toDate(p.payment_end_date)
+              )
+            );
+            const payCell =
+              matched.length > 0
+                ? `<span class="badge bg-success">Оплачено (${matched.length})</span>`
+                : `<span class="badge bg-danger">Не оплачено</span>`;
+
+            html += `
+              <tr>
+                <td>${period}</td>
+                <td>${place}</td>
+                <td class="diagnosis-col">${dx}</td>
+                <td>${payCell}</td>
+              </tr>
+            `;
+          });
+
+          html += `
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        // Оплати
+        if (data.payments && data.payments.length > 0) {
+          html += `
+            <div class="card mb-3">
+              <div class="card-header bg-warning text-dark">
+                <h6 class="mb-0"><i class="fas fa-money-bill me-2"></i>Оплати (${data.payments.length})</h6>
+              </div>
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-sm table-striped">
+                    <thead>
+                      <tr>
+                        <th>Період оплати</th>
+                        <th>Дні лікування</th>
+                        <th>Сума за день</th>
+                        <th>Загальна сума</th>
+                        <th>Джерело</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+          `;
+
+          data.payments.forEach((payment) => {
+            html += `
+              <tr>
+                <td>${formatDate(payment.payment_start_date)} - ${formatDate(
+              payment.payment_end_date
+            )}</td>
+                <td>${payment.treatment_days || 0}</td>
+                <td>${payment.amount_per_day || 0} грн</td>
+                <td>${payment.total_amount || 0} грн</td>
+                <td>${payment.source_file || "Н/Д"}</td>
+              </tr>
+            `;
+          });
+
+          html += `
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+
+        html += "</div>";
+        resultsDiv.innerHTML = html;
+      } catch (error) {
+        resultsDiv.innerHTML = `<div class="alert alert-danger">Помилка: ${error.message}</div>`;
+      }
+    });
+</script>
+{% endblock %}
