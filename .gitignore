@@ -43,6 +43,13 @@ output/
 data/*.xlsx
 ukr.traineddata
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database/
+medical_new.db
+
 # Environment variables
 .env
 .env.local
