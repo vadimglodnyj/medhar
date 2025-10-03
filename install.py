@@ -109,6 +109,33 @@ def check_system_requirements():
     
     return True
 
+def create_directories():
+    """Створює необхідні папки"""
+    print("📁 Створення необхідних папок...")
+    
+    directories = [
+        "data",
+        "database", 
+        "templates",
+        "static",
+        "temp",
+        "uploads",
+        "output"
+    ]
+    
+    for directory in directories:
+        if not os.path.exists(directory):
+            try:
+                os.makedirs(directory, exist_ok=True)
+                print(f"✅ Папка {directory} створена")
+            except OSError as e:
+                print(f"❌ Помилка створення папки {directory}: {e}")
+                return False
+        else:
+            print(f"✅ Папка {directory} вже існує")
+    
+    return True
+
 def create_virtual_environment():
     """Створює віртуальне середовище"""
     print("🐍 Створення віртуального середовища...")
@@ -136,6 +163,10 @@ def main():
     
     # Перевіряємо системні вимоги
     if not check_system_requirements():
+        return 1
+    
+    # Створюємо необхідні папки
+    if not create_directories():
         return 1
     
     # Створюємо віртуальне середовище
