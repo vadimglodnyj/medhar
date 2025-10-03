@@ -32,9 +32,14 @@ def install_requirements():
         subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], 
                       check=True, capture_output=True)
         
-        # Встановлюємо залежності
+        # Встановлюємо setuptools та wheel
+        print("🔧 Встановлення базових інструментів...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "setuptools", "wheel"], 
+                      check=True, capture_output=True)
+        
+        # Встановлюємо залежності з обробкою помилок
         print("📥 Встановлення пакетів...")
-        result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], 
+        result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--no-cache-dir"], 
                                check=True, capture_output=True, text=True)
         
         print("✅ Залежності встановлено успішно!")
@@ -46,7 +51,26 @@ def install_requirements():
             print("STDOUT:", e.stdout)
         if e.stderr:
             print("STDERR:", e.stderr)
-        return False
+        
+        # Спробуємо встановити основні пакети окремо
+        print("🔄 Спробуємо встановити основні пакети окремо...")
+        try:
+            core_packages = [
+                "numpy", "Flask", "pandas", "python-docx", "docxtpl", 
+                "openpyxl", "Werkzeug", "requests", "beautifulsoup4", "python-dotenv"
+            ]
+            
+            for package in core_packages:
+                print(f"📦 Встановлення {package}...")
+                subprocess.run([sys.executable, "-m", "pip", "install", package], 
+                              check=True, capture_output=True)
+            
+            print("✅ Основні пакети встановлено успішно!")
+            return True
+            
+        except subprocess.CalledProcessError as e2:
+            print(f"❌ Помилка встановлення основних пакетів: {e2}")
+            return False
 
 def check_system_requirements():
     """Перевіряє системні вимоги"""

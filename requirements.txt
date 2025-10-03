@@ -1,15 +1,26 @@
-numpy==1.26.4
-Flask==2.3.3
-pandas==2.1.1
-python-docx==0.8.11
-docxtpl==0.16.7
-openpyxl==3.1.2
-Werkzeug==2.3.7
-pdf2image==1.17.0
-pypdf==4.2.0
-Pillow>=10,<11
-easyocr==1.7.1
-pytesseract==0.3.13
-requests==2.31.0
-beautifulsoup4==4.12.2
-python-dotenv==1.0.0
+# Core dependencies - compatible with Python 3.13
+numpy>=1.24.0
+Flask>=2.3.0
+pandas>=2.0.0
+python-docx>=0.8.11
+docxtpl>=0.16.7
+openpyxl>=3.1.0
+Werkzeug>=2.3.0
+
+# PDF processing
+pdf2image>=1.17.0
+pypdf>=4.0.0
+Pillow>=10.0.0
+
+# OCR and text processing
+easyocr>=1.7.0
+pytesseract>=0.3.10
+
+# Web and utilities
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+python-dotenv>=1.0.0
+
+# Additional dependencies for better compatibility
+setuptools>=65.0.0
+wheel>=0.40.0
