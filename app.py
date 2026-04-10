@@ -82,6 +82,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from config import *
 
 from utils.circumstances_parser import parse_circumstances
+from utils.ukrainian_pib_genitive import (
+    build_pib_rodovyi_for_document,
+    format_nominative_pib_display,
+    nominative_pib_to_genitive_line,
+)
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -316,20 +321,6 @@ def _load_treatments_data_unlocked():
     except Exception as e:
         logger.error(f"Помилка при завантаженні даних: {e}")
         raise
-
-def format_pib_rodovyi(pib_rodovyi_input):
-    """Форматує ПІБ у родовому відмінку"""
-    if not pib_rodovyi_input or not pib_rodovyi_input.strip():
-        return ""
-    
-    parts = pib_rodovyi_input.strip().split()
-    if not parts: 
-        return ""
-    
-    parts[0] = parts[0].upper()
-    for i in range(1, len(parts)): 
-        parts[i] = parts[i].title()
-    return " ".join(parts)
 
 def format_rank_genitive(rank):
     """Конвертує звання в родовому відмінку для використання в шапці"""
@@ -683,6 +674,20 @@ def get_stats():
         logger.error(f"Помилка при отриманні статистики: {e}")
         return jsonify({'error': str(e)})
 
+@app.route('/api/pib_genitive', methods=['GET'])
+def api_pib_genitive():
+    """Автоматичний родовий відмінок з називного (для підказки у формі)."""
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify({'genitive': ''})
+    try:
+        gen = nominative_pib_to_genitive_line(q)
+        return jsonify({'genitive': gen or ''})
+    except Exception as e:
+        logger.warning("api_pib_genitive: %s", e)
+        return jsonify({'genitive': '', 'error': str(e)})
+
+
 @app.route('/api/search_pib', methods=['GET'])
 def search_pib():
     """API endpoint для пошуку ПІБ"""
@@ -808,9 +813,6 @@ def medical_characteristic():
         if not pib_nazivnyi:
             flash("ПІБ (в називному відмінку) є обов'язковим полем", "error")
             return render_template('medical_characteristic.html')
-        if not pib_rodovyi_input:
-            flash("ПІБ (в родовому відмінку) є обов'язковим полем", "error")
-            return render_template('medical_characteristic.html')
         if not final_enlistment_date:
             flash("Дата зарахування є обов'язковим полем", "error")
             return render_template('medical_characteristic.html')
@@ -911,8 +913,11 @@ def medical_characteristic():
             else:
                 context['treatment_history'] = ["\t" + "За час проходження військової служби не знаходився на стаціонарному або амбулаторному лікуванні у закладах Міністерства охорони здоров'я України та медичних територіальних об'єднань Міністерства внутрішніх справ України."]
         
-        context['pib_nazivnyi'] = pib_nazivnyi
-        context['pib_rodovyi'] = format_pib_rodovyi(pib_rodovyi_input)
+        pib_nazivnyi_display = format_nominative_pib_display(pib_nazivnyi)
+        context['pib_nazivnyi'] = pib_nazivnyi_display
+        context['pib_rodovyi'] = build_pib_rodovyi_for_document(
+            pib_nazivnyi_display, pib_rodovyi_input
+        )
         context['enlistment_date'] = final_enlistment_date
         context['observation_end'] = final_observation_end
         context['signatory_position'] = signatory_position
@@ -997,7 +1002,7 @@ def medical_characteristic():
 
         response = make_response(send_file(
             file_stream, as_attachment=True,
-            download_name=f'Медична_характеристика_{pib_nazivnyi}.docx',
+            download_name=f'Медична_характеристика_{pib_nazivnyi_display.replace(" ", "_")}.docx',
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         ))
         response.set_cookie('fileDownload', 'true', max_age=20)

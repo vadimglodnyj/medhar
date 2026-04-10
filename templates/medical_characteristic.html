@@ -159,13 +159,12 @@ endblock %} {% block content %}
                 id="pib_rodovyi"
                 name="pib_rodovyi"
                 class="form-control"
-                placeholder="Прізвища Імені По батькові"
-                required
+                placeholder="Заповниться автоматично з називного; можна виправити вручну"
               />
-              <div class="form-text text-danger">
-                <i class="fas fa-exclamation-triangle me-1"></i>
-                <strong>УВАГА:</strong> Введіть ПІБ в родовому відмінку вручну
-                (наприклад: Іванова Івана Івановича)
+              <div class="form-text text-muted">
+                <i class="fas fa-magic me-1"></i>
+                Родовий відмінок підставляється автоматично (прізвище у верхньому регістрі).
+                Якщо форма неточна — відредагуйте поле вручну перед генерацією.
               </div>
             </div>
 
@@ -679,6 +678,18 @@ endblock %} {% block content %}
     pibNazivnyi.value = value;
     pibRodovyi.value = "";
 
+    (async () => {
+      try {
+        const r = await fetch(
+          "/api/pib_genitive?q=" + encodeURIComponent(value)
+        );
+        const j = await r.json();
+        if (j.genitive) pibRodovyi.value = j.genitive;
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+
     // Автозаповнення звання якщо є дані
     if (data && data.rank) {
       const rankSelect = document.getElementById("zvanie");
@@ -704,14 +715,6 @@ endblock %} {% block content %}
         } else if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) {
           birthDateInput.value = v;
         }
-      }
-    }
-
-    // Автозаповнення ПІБ у родовому відмінку (просте копіювання як базовий варіант)
-    if (data && data.value) {
-      const rodInput = document.getElementById("pib_rodovyi");
-      if (rodInput && !rodInput.value) {
-        rodInput.value = data.value;
       }
     }
 
@@ -781,6 +784,24 @@ endblock %} {% block content %}
 
   // Автозаповнення родового відмінку та пошук ПІБ
   let searchTimeout;
+  let rodovyiFetchTimeout;
+
+  function scheduleRodovyiFromNazivnyi() {
+    clearTimeout(rodovyiFetchTimeout);
+    rodovyiFetchTimeout = setTimeout(async () => {
+      const q = pibNazivnyi.value.trim();
+      if (q.length < 3) return;
+      try {
+        const r = await fetch(
+          "/api/pib_genitive?q=" + encodeURIComponent(q)
+        );
+        const j = await r.json();
+        if (j.genitive) pibRodovyi.value = j.genitive;
+      } catch (e) {
+        console.error(e);
+      }
+    }, 450);
+  }
 
   pibNazivnyi.addEventListener("input", function () {
     pibRodovyi.value = "";
@@ -788,6 +809,14 @@ endblock %} {% block content %}
     searchTimeout = setTimeout(() => {
       searchPIB(pibNazivnyi.value);
     }, 300);
+    scheduleRodovyiFromNazivnyi();
+  });
+
+  pibNazivnyi.addEventListener("blur", function () {
+    const q = pibNazivnyi.value.trim();
+    if (q.length >= 3 && !pibRodovyi.value.trim()) {
+      scheduleRodovyiFromNazivnyi();
+    }
   });
 
   pibNazivnyi.addEventListener("keydown", handleKeyNavigation);

@@ -33,6 +33,8 @@ def install_core_packages():
         "python-docx",
         "docxtpl",
         "openpyxl",
+        "pymorphy3",
+        "pymorphy3-dicts-uk",
         "Werkzeug",
         "requests",
         "beautifulsoup4",
