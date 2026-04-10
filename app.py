@@ -5,9 +5,13 @@
 
 import os
 import sys
+import shutil
+import tempfile
+import threading
 import pandas as pd
 import numpy as np
 from flask import Flask, render_template, request, send_file, make_response, flash, redirect, url_for, jsonify
+from werkzeug.utils import secure_filename
 
 def convert_to_json_serializable(obj):
     """Конвертує об'єкти pandas/numpy в JSON-сумісні типи"""
@@ -77,21 +81,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Імпортуємо конфігурацію
 from config import *
 
-# Імпортуємо генератори
-from generators.service_characteristic import ServiceCharacteristicGenerator
-from generators.vlk_report import VLKReportGenerator
-from generators.payment_analyzer import PaymentAnalyzer, PaymentReportGenerator
-from generators.medical_payment_analyzer import MedicalPaymentAnalyzer
-from utils.database_reader import PersonnelDatabase
 from utils.circumstances_parser import parse_circumstances
-from utils.pdf_parser import extract_data_from_pdf
-from utils.new_medical_database import NewMedicalDatabase
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
-
-# Ініціалізуємо нову базу даних (використовуємо файл у папці database)
-new_medical_db = NewMedicalDatabase("database/medical_new.db")
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)
@@ -100,77 +93,190 @@ logger = logging.getLogger(__name__)
 # Глобальна змінна для кешування даних
 treatments_cache = None
 cache_timestamp = None
+# Сигнатура файлів для інвалідації кешу після зміни Excel
+treatments_cache_file_signature = None
+_treatments_load_lock = threading.Lock()
+treatments_load_in_progress = False
+treatments_last_load_error = None
 
 # Пам'ять для результатів з PDF (ключ: ПІБ_чисте)
 pdf_overrides = {}
 
-def load_treatments_data():
-    """Завантажує дані з Excel файлів з кешуванням (гібридна система: архів + нові дані)"""
-    global treatments_cache, cache_timestamp
-    
-    # Перевіряємо чи потрібно оновити кеш (кожні 5 хвилин)
-    if treatments_cache is not None and cache_timestamp is not None:
-        if (datetime.now() - cache_timestamp).seconds < 300:  # 5 хвилин
-            return treatments_cache
-    
+
+def _excel_cell_str(value, default=""):
+    """Текст з комірки Excel/pandas без 'nan' у рядку."""
+    if value is None:
+        return default
     try:
-        logger.info("Завантаження даних з Excel файлів (гібридна система)...")
-        
-        # Перевіряємо існування файлів
-        if not os.path.exists(TREATMENTS_2025_FILE):
-            raise FileNotFoundError(f"Файл {TREATMENTS_2025_FILE} не знайдено")
-        
-        logger.info("Файли Excel знайдено, починаємо завантаження...")
-        
-        # Завантажуємо нові дані з 2025
-        df_new_data = pd.read_excel(TREATMENTS_2025_FILE)
-        df_new_data.columns = df_new_data.columns.str.strip()
-        logger.info(f"Завантажено нових записів з 2025: {len(df_new_data)}")
-        
-        # Завантажуємо архівні дані
-        if os.path.exists(TREATMENTS_FINAL_FILE):
-            logger.info("Завантажуємо архівні дані з treatments_final.xlsx...")
-            df_archive = pd.read_excel(TREATMENTS_FINAL_FILE)
-            df_archive.columns = df_archive.columns.str.strip()
-            logger.info(f"Завантажено архівних записів: {len(df_archive)}")
-            
-            # Об'єднуємо архів + нові дані
-            logger.info("Об'єднуємо архівні та нові дані...")
-            treatments_df = pd.concat([df_archive, df_new_data], ignore_index=True)
-            
-            # Видаляємо дублікати
-            logger.info("Видаляємо дублікати...")
-            initial_count = len(treatments_df)
-            
-            # Створюємо унікальний ключ для виявлення дублікатів
-            treatments_df['ПІБ_чисте'] = (
-                treatments_df['Прізвище'].fillna('').astype(str) + ' ' +
-                treatments_df['Ім\'я'].fillna('').astype(str) + ' ' +
-                treatments_df['По батькові'].fillna('').astype(str)
-            ).str.replace(r'\s+', ' ', regex=True).str.strip().str.lower()
-            
-            # Видаляємо дублікати за ПІБ та датою надходження
-            # Але зберігаємо ВСІ унікальні записи (не тільки останні)
-            if 'Дата надходження в поточний Л/З' in treatments_df.columns:
-                treatments_df['Дата надходження в поточний Л/З'] = pd.to_datetime(treatments_df['Дата надходження в поточний Л/З'], errors='coerce')
-                # Видаляємо тільки точні дублікати (ПІБ + дата), але зберігаємо різні дати лікування
-                treatments_df = treatments_df.drop_duplicates(
-                    subset=['ПІБ_чисте', 'Дата надходження в поточний Л/З'], 
-                    keep='first'  # Залишаємо перший запис (з архіву)
-                )
-            else:
-                # Якщо немає дати, видаляємо дублікати за ПІБ, але зберігаємо перший запис
-                treatments_df = treatments_df.drop_duplicates(subset=['ПІБ_чисте'], keep='first')
-            
-            final_count = len(treatments_df)
-            duplicates_removed = initial_count - final_count
-            logger.info(f"Видалено дублікатів: {duplicates_removed}")
-            logger.info(f"Фінальна кількість записів: {final_count}")
-            
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    if not s or s.lower() == "nan" or s == "<na>":
+        return default
+    return s
+
+
+def _row_full_name(row) -> str:
+    """ПІБ для відображення та пошуку: спочатку колонка ПІБ, інакше з трьох частин."""
+    pib = _excel_cell_str(row.get("ПІБ"))
+    if pib:
+        return pib
+    sur = _excel_cell_str(row.get("Прізвище"))
+    first = _excel_cell_str(row.get("Ім'я"))
+    pat = _excel_cell_str(row.get("По батькові"))
+    return " ".join(p for p in (sur, first, pat) if p).strip()
+
+
+def list_treatments_year_files_sorted():
+    """Усі `treatments_YYYY.xlsx` у DATA_DIR, відсортовані за роком зростання."""
+    if not os.path.isdir(DATA_DIR):
+        return []
+    found = []
+    for name in os.listdir(DATA_DIR):
+        m = TREATMENTS_YEAR_FILE_RE.match(name)
+        if not m:
+            continue
+        year = int(m.group(1))
+        path = os.path.join(DATA_DIR, name)
+        if os.path.isfile(path):
+            found.append((year, path))
+    found.sort(key=lambda x: x[0])
+    return found
+
+
+def treatments_path_for_year(year: int) -> str:
+    """Шлях до файлу бази за конкретний рік (для завантаження / відображення)."""
+    return os.path.join(DATA_DIR, f"treatments_{int(year)}.xlsx")
+
+
+def _treatments_excel_file_signature():
+    """Час модифікації всіх релевантних Excel (для скидання кешу)."""
+    paths = []
+    if os.path.exists(TREATMENTS_FINAL_FILE):
+        paths.append(TREATMENTS_FINAL_FILE)
+    for _, p in list_treatments_year_files_sorted():
+        paths.append(p)
+    return tuple((p, os.path.getmtime(p)) for p in paths)
+
+
+def _validate_treatments_upload_dataframe(df):
+    """Перевірка структури завантаженого файлу перед заміною на диску."""
+    if df is None or len(df) < 1:
+        return False, "Файл порожній або не містить рядків даних"
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip()
+    has_triple = all(c in df.columns for c in ["Прізвище", "Ім'я", "По батькові"])
+    has_pib = "ПІБ" in df.columns
+    if not has_triple and not has_pib:
+        return (
+            False,
+            "Потрібні колонки «Прізвище», «Ім'я», «По батькові» або колонка «ПІБ»",
+        )
+    return True, None
+
+
+def _invalidate_treatments_cache_unlocked():
+    """Скинути кеш після зміни файлів (викликати під _treatments_load_lock)."""
+    global treatments_cache, cache_timestamp, treatments_cache_file_signature
+    treatments_cache = None
+    cache_timestamp = None
+    treatments_cache_file_signature = None
+
+
+def load_treatments_data():
+    """Завантажує дані з Excel: опційний архів + 2024 + 2025 (об'єднано) + 2026 (поточний рік)."""
+    global treatments_cache, cache_timestamp, treatments_cache_file_signature
+    global treatments_load_in_progress, treatments_last_load_error
+
+    sig = _treatments_excel_file_signature()
+    now = datetime.now()
+
+    if treatments_cache is not None and cache_timestamp is not None:
+        cache_fresh = (now - cache_timestamp).total_seconds() < 300  # 5 хвилин
+        sig_ok = treatments_cache_file_signature == sig
+        if cache_fresh and sig_ok:
+            return treatments_cache
+
+    with _treatments_load_lock:
+        sig = _treatments_excel_file_signature()
+        now = datetime.now()
+        if treatments_cache is not None and cache_timestamp is not None:
+            cache_fresh = (now - cache_timestamp).total_seconds() < 300
+            sig_ok = treatments_cache_file_signature == sig
+            if cache_fresh and sig_ok:
+                return treatments_cache
+
+        treatments_load_in_progress = True
+        treatments_last_load_error = None
+        try:
+            return _load_treatments_data_unlocked()
+        except Exception as e:
+            treatments_last_load_error = str(e)
+            raise
+        finally:
+            treatments_load_in_progress = False
+
+
+def _load_treatments_data_unlocked():
+    """Внутрішнє завантаження Excel (викликати лише під _treatments_load_lock)."""
+    global treatments_cache, cache_timestamp, treatments_cache_file_signature
+
+    try:
+        year_files = list_treatments_year_files_sorted()
+        has_final = os.path.exists(TREATMENTS_FINAL_FILE)
+        if not year_files and not has_final:
+            raise FileNotFoundError(
+                f"У папці {DATA_DIR!r} немає файлів treatments_YYYY.xlsx і немає treatments_final.xlsx"
+            )
+
+        logger.info(
+            "Завантаження Excel: %s + %s",
+            "treatments_final.xlsx" if has_final else "(без архіву)",
+            ", ".join(f"treatments_{y}.xlsx" for y, _ in year_files) if year_files else "(немає річних файлів)",
+        )
+
+        frames = []
+
+        if has_final:
+            df_final = pd.read_excel(TREATMENTS_FINAL_FILE)
+            df_final.columns = df_final.columns.str.strip()
+            logger.info(f"Архів treatments_final.xlsx: {len(df_final)} записів")
+            frames.append(df_final)
+
+        for year, path in year_files:
+            df_y = pd.read_excel(path)
+            df_y.columns = df_y.columns.str.strip()
+            logger.info(f"treatments_{year}.xlsx: {len(df_y)} записів")
+            frames.append(df_y)
+
+        if not frames:
+            raise ValueError("Немає жодного кадру даних для об'єднання")
+
+        treatments_df = pd.concat(frames, ignore_index=True)
+
+        logger.info("Видаляємо дублікати (пріоритет у пізніших джерелів за роком файлу)...")
+        initial_count = len(treatments_df)
+
+        treatments_df['ПІБ_чисте'] = (
+            treatments_df['Прізвище'].fillna('').astype(str) + ' ' +
+            treatments_df['Ім\'я'].fillna('').astype(str) + ' ' +
+            treatments_df['По батькові'].fillna('').astype(str)
+        ).str.replace(r'\s+', ' ', regex=True).str.strip().str.lower()
+
+        if 'Дата надходження в поточний Л/З' in treatments_df.columns:
+            treatments_df['Дата надходження в поточний Л/З'] = pd.to_datetime(
+                treatments_df['Дата надходження в поточний Л/З'], errors='coerce'
+            )
+            treatments_df = treatments_df.drop_duplicates(
+                subset=['ПІБ_чисте', 'Дата надходження в поточний Л/З'],
+                keep='last',
+            )
         else:
-            # Fallback: якщо архіву немає, використовуємо тільки нові дані
-            logger.warning("Архівний файл treatments_final.xlsx не знайдено, використовуємо тільки нові дані")
-            treatments_df = df_new_data
+            treatments_df = treatments_df.drop_duplicates(subset=['ПІБ_чисте'], keep='last')
+
+        logger.info(f"Видалено дублікатів: {initial_count - len(treatments_df)}; записів після: {len(treatments_df)}")
         
         # Обробка дат
         date_columns = ['Дата надходження в поточний Л/З', 'Дата виписки', 'Дата народження', 'Дата первинної госпіталізації', 'Дата виписки з поточного Л/З']
@@ -182,18 +288,28 @@ def load_treatments_data():
         for col in ['Прізвище', 'Ім\'я', 'По батькові']:
             if col in treatments_df.columns:
                 treatments_df[col] = treatments_df[col].fillna('').astype(str)
+                treatments_df[col] = treatments_df[col].replace(
+                    to_replace=r'(?i)^(nan|<na>|none)$', value='', regex=True
+                )
+
+        # Завжди збираємо ПІБ з трьох полів, якщо вони є — так не залишаються порожні NaN з колонки «ПІБ» у Excel
+        if all(c in treatments_df.columns for c in ['Прізвище', 'Ім\'я', 'По батькові']):
+            treatments_df['ПІБ'] = (
+                treatments_df['Прізвище'].astype(str).str.strip() + ' ' +
+                treatments_df['Ім\'я'].astype(str).str.strip() + ' ' +
+                treatments_df['По батькові'].astype(str).str.strip()
+            ).str.replace(r'\s+', ' ', regex=True).str.strip()
+        elif 'ПІБ' in treatments_df.columns:
+            treatments_df['ПІБ'] = treatments_df['ПІБ'].map(lambda x: _excel_cell_str(x))
+
+        # Після нормалізації ПІБ оновлюємо ключ пошуку
+        treatments_df['ПІБ_чисте'] = treatments_df['ПІБ'].str.replace(r'\s+', ' ', regex=True).str.strip().str.lower()
         
-        # Створюємо ПІБ та ПІБ_чисте (якщо ще не створено)
-        if 'ПІБ' not in treatments_df.columns:
-            treatments_df['ПІБ'] = treatments_df['Прізвище'] + ' ' + treatments_df['Ім\'я'] + ' ' + treatments_df['По батькові']
-        
-        if 'ПІБ_чисте' not in treatments_df.columns:
-            treatments_df['ПІБ_чисте'] = treatments_df['ПІБ'].str.replace(r'\s+', ' ', regex=True).str.strip().str.lower()
-        
-        # Оновлюємо кеш
+        # Оновлюємо кеш (сигнатура файлів — зміни на диску скидають кеш)
         treatments_cache = treatments_df
         cache_timestamp = datetime.now()
-        
+        treatments_cache_file_signature = _treatments_excel_file_signature()
+
         logger.info(f"Дані успішно завантажено. Записів: {len(treatments_df)}")
         return treatments_df
         
@@ -446,14 +562,122 @@ def format_treatment_history(person_treatments, hide_diagnosis):
     # Повертаємо список рядків; таб додаємо на початку для візуального відступу
     return ["\t" + line for line in history_lines]
 
+@app.route('/api/treatments_ready', methods=['GET'])
+def treatments_ready():
+    """Статус прогріву кешу Excel (для прелоадера на сторінці форми)."""
+    return jsonify({
+        'ready': treatments_cache is not None,
+        'loading': treatments_load_in_progress and treatments_cache is None,
+        'error': treatments_last_load_error,
+    })
+
+
+@app.route('/api/treatments_sources', methods=['GET'])
+def treatments_sources():
+    """Список підключених файлів treatments_YYYY.xlsx (без повних шляхів на диску)."""
+    items = []
+    for year, path in list_treatments_year_files_sorted():
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        items.append({
+            'year': year,
+            'filename': os.path.basename(path),
+            'mtime': mtime,
+        })
+    cy = datetime.now().year
+    dest = treatments_path_for_year(cy)
+    return jsonify({
+        'year_files': items,
+        'has_final': os.path.isfile(TREATMENTS_FINAL_FILE),
+        'calendar_year': cy,
+        'current_year_target': cy,
+        'current_year_filename': os.path.basename(dest),
+        'current_year_exists': os.path.isfile(dest),
+    })
+
+
+@app.route('/api/treatments_upload', methods=['POST'])
+def treatments_upload():
+    """
+    Заміна / створення data/treatments_YYYY.xlsx: перевірка, атомарний запис, скидання кешу.
+    Старий файл того ж року перезаписується.
+    """
+    if 'file' not in request.files:
+        return jsonify({'ok': False, 'error': 'Файл не передано (поле file)'}), 400
+    up = request.files['file']
+    if not up or not up.filename:
+        return jsonify({'ok': False, 'error': 'Оберіть файл .xlsx'}), 400
+    if not up.filename.lower().endswith('.xlsx'):
+        return jsonify({'ok': False, 'error': 'Допускається лише розширення .xlsx'}), 400
+
+    year = request.form.get('year', type=int)
+    if year is None:
+        year = datetime.now().year
+    if year < 1990 or year > 2100:
+        return jsonify({'ok': False, 'error': 'Некоректний рік (1990–2100)'}), 400
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix='.xlsx', dir=TEMP_DIR)
+        os.close(fd)
+        up.save(tmp_path)
+        size = os.path.getsize(tmp_path)
+        if size > TREATMENTS_UPLOAD_MAX_BYTES:
+            return (
+                jsonify({
+                    'ok': False,
+                    'error': f'Файл завеликий (макс. {TREATMENTS_UPLOAD_MAX_BYTES // (1024 * 1024)} МБ)',
+                }),
+                413,
+            )
+        try:
+            df = pd.read_excel(tmp_path)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': f'Не вдалося прочитати Excel: {e}'}), 400
+        ok, err_msg = _validate_treatments_upload_dataframe(df)
+        if not ok:
+            return jsonify({'ok': False, 'error': err_msg}), 400
+
+        dest = treatments_path_for_year(year)
+        staging = os.path.join(DATA_DIR, f'.treatments_{year}.upload.tmp.xlsx')
+        with _treatments_load_lock:
+            shutil.copyfile(tmp_path, staging)
+            os.replace(staging, dest)
+            _invalidate_treatments_cache_unlocked()
+        logger.info(
+            "Оновлено %s з файлу %s (%s рядків)",
+            os.path.basename(dest),
+            secure_filename(up.filename),
+            len(df),
+        )
+        return jsonify({
+            'ok': True,
+            'year': year,
+            'filename': os.path.basename(dest),
+            'rows': int(len(df)),
+        })
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
     """API endpoint для отримання статистики бази даних"""
     try:
-        # Використовуємо SQLite БД замість Excel
-        stats = new_medical_db.get_database_stats()
-        
-        return jsonify(convert_to_json_serializable(stats))
+        treatments_df = load_treatments_data()
+        stats = {
+            "total_records": int(len(treatments_df)),
+            "unique_patients": int(treatments_df["ПІБ_чисте"].nunique()) if "ПІБ_чисте" in treatments_df.columns else 0,
+        }
+        return jsonify(stats)
         
     except Exception as e:
         logger.error(f"Помилка при отриманні статистики: {e}")
@@ -466,9 +690,44 @@ def search_pib():
         query = request.args.get('q', '').strip()
         if len(query) < 2:
             return jsonify({'results': []})
-        
-        # Пошук у SQLite БД
-        results = new_medical_db.search_patients(query, limit=10)
+
+        treatments_df = load_treatments_data()
+        if "ПІБ_чисте" not in treatments_df.columns or "ПІБ" not in treatments_df.columns:
+            return jsonify({'results': []})
+
+        q_clean = re.sub(r"\s+", " ", query).strip().lower()
+        matched = treatments_df[treatments_df["ПІБ_чисте"].str.contains(q_clean, na=False)]
+        if matched.empty:
+            return jsonify({'results': []})
+
+        # Беремо по одному запису на кожного пацієнта для автокомпліту
+        unique_patients = matched.drop_duplicates(subset=["ПІБ_чисте"], keep="first").head(10)
+        results = []
+        for _, row in unique_patients.iterrows():
+            full_name = _row_full_name(row)
+            if not full_name:
+                continue
+            rank = _excel_cell_str(row.get("Військове звання"))
+            birth_date = row.get("Дата народження")
+
+            birth_date_str = ""
+            try:
+                if pd.notna(birth_date):
+                    birth_date_str = birth_date.strftime("%d.%m.%Y") if hasattr(birth_date, "strftime") else _excel_cell_str(birth_date)
+            except Exception:
+                birth_date_str = ""
+
+            label = full_name
+            if rank:
+                label = f"{full_name} ({rank})"
+
+            results.append({
+                "label": label,
+                "value": full_name,
+                "rank": rank,
+                "birth_date": birth_date_str,
+            })
+
         return jsonify({'results': results})
         
     except Exception as e:
@@ -477,21 +736,8 @@ def search_pib():
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """Головна сторінка з формою для вибору типу документа"""
-    if request.method == 'POST':
-        document_type = request.form.get('document_type', 'medical_characteristic')
-        
-        # Перенаправляємо на відповідний маршрут
-        if document_type == 'service_characteristic':
-            return redirect(url_for('service_characteristic'))
-        elif document_type == 'vlk_report':
-            return redirect(url_for('vlk_report'))
-        elif document_type == 'payment_reports':
-            return redirect(url_for('payment_reports'))
-        else:
-            return redirect(url_for('medical_characteristic'))
-    
-    return render_template('index.html')
+    """Головна сторінка: одразу на генерацію медичної характеристики."""
+    return redirect(url_for('medical_characteristic'))
 
 @app.route('/medical-characteristic', methods=['GET', 'POST'])
 def medical_characteristic():
@@ -760,778 +1006,19 @@ def medical_characteristic():
 
     return render_template('medical_characteristic.html')
 
-@app.route('/service-characteristic', methods=['GET', 'POST'])
-def service_characteristic():
-    """Генерація службової характеристики"""
-    if request.method == 'POST':
-        try:
-            # Валідація даних
-            generator = ServiceCharacteristicGenerator()
-            is_valid, error = generator.validate_data(request.form.to_dict())
-            
-            if not is_valid:
-                flash(error, "error")
-                return render_template('service_characteristic.html')
-            
-            # Генерація документа
-            response = generator.generate_document(
-                request.form.to_dict(), 
-                "Службова_характеристика"
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Помилка генерації службової характеристики: {e}")
-            flash(f"Помилка генерації документа: {e}", "error")
-            return render_template('service_characteristic.html')
-    
-    return render_template('service_characteristic.html')
-
-@app.route('/vlk-report', methods=['GET', 'POST'])
-def vlk_report():
-    """Генерація рапорту ВЛК"""
-    if request.method == 'POST':
-        try:
-            # Валідація даних
-            generator = VLKReportGenerator()
-            is_valid, error = generator.validate_data(request.form.to_dict())
-            
-            if not is_valid:
-                flash(error, "error")
-                return render_template('vlk_report.html')
-            
-            # Генерація документа
-            response = generator.generate_document(
-                request.form.to_dict(), 
-                "Рапорт_ВЛК"
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Помилка генерації рапорту ВЛК: {e}")
-            flash(f"Помилка генерації документа: {e}", "error")
-            return render_template('vlk_report.html')
-    
-    return render_template('vlk_report.html')
-
-@app.route('/api/upload_pdf', methods=['POST'])
-def upload_pdf():
-    """Завантаження PDF, парсинг та збереження епізодів в пам'яті."""
+def _warmup_treatments_cache():
+    """Фоновий прогрів кешу після старту — перший пошук не чекає читання великих Excel."""
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'Файл не надіслано'}), 400
-        file = request.files['file']
-        person_pib = (request.form.get('pib') or '').strip().lower()
-        if not person_pib:
-            return jsonify({'error': 'Не вказано ПІБ для привʼязки'}), 400
-
-        # Збережемо тимчасово
-        temp_dir = os.path.join(TEMP_DIR)
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.pdf")
-        file.save(temp_path)
-
-        episodes = extract_data_from_pdf(temp_path) or []
-        pdf_overrides[person_pib] = episodes
-
-        return jsonify({'episodes': episodes, 'count': len(episodes)})
+        with app.app_context():
+            load_treatments_data()
+        logger.info("Прогрів кешу Excel завершено — пошук готовий.")
     except Exception as e:
-        logger.error(f"Помилка при обробці PDF: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/apply_pdf_overrides', methods=['POST'])
-def apply_pdf_overrides():
-    """Застосувати епізоди, завантажені з PDF (pdf_overrides), до Excel та зберегти зміни.
-
-    Логіка:
-      - Завантажуємо актуальні дані (із кешем)
-      - Для кожного ПІБ_чисте у pdf_overrides намагаємось знайти відповідні записи
-      - Якщо знайдено записи з такими ж датами — оновлюємо 'Попередній діагноз'
-      - Якщо не знайдено — додаємо нові рядки, копіюючи базовий запис для людини
-      - Робимо бекап файлу призначення та зберігаємо оновлений датафрейм
-      - Оновлюємо кеш
-    """
-    try:
-        # Перевірка, що є дані для застосування
-        if not pdf_overrides:
-            return jsonify({'error': 'Немає завантажених епізодів для застосування'}), 400
-
-        # Завантажити дані
-        treatments_df = load_treatments_data().copy()
-
-        # Підготовка колонок та форматів
-        if 'ПІБ_чисте' not in treatments_df.columns:
-            treatments_df['ПІБ'] = (
-                treatments_df['Прізвище'].fillna('').astype(str) + ' ' +
-                treatments_df["Ім'я"].fillna('').astype(str) + ' ' +
-                treatments_df['По батькові'].fillna('').astype(str)
-            )
-            treatments_df['ПІБ_чисте'] = (
-                treatments_df['ПІБ'].str.replace(r'\s+', ' ', regex=True).str.strip().str.lower()
-            )
-
-        # Допоміжна функція: знайти базовий запис для ПІБ
-        def pick_base_row_for_person(df, pib_clean):
-            subset = df[df['ПІБ_чисте'] == pib_clean]
-            if subset.empty:
-                return None
-            return subset.iloc[0]
-
-        updates = 0
-        inserts = 0
-
-        for pib_clean, episodes in pdf_overrides.items():
-            if not episodes:
-                continue
-            base_row = pick_base_row_for_person(treatments_df, pib_clean)
-            for ep in episodes:
-                ds = ep.get('date_start')
-                de = ep.get('date_end')
-                dx = (ep.get('diagnosis') or '').strip()
-
-                if ds and de and 'Дата надходження в поточний Л/З' in treatments_df.columns and 'Дата виписки' in treatments_df.columns:
-                    try:
-                        mask = (
-                            treatments_df['ПІБ_чисте'].astype(str) == pib_clean
-                        ) & (
-                            treatments_df['Дата надходження в поточний Л/З'].dt.strftime('%d.%m.%Y') == ds
-                        ) & (
-                            treatments_df['Дата виписки'].dt.strftime('%d.%m.%Y') == de
-                        )
-                    except Exception:
-                        mask = False
-                    if isinstance(mask, pd.Series) and mask.any():
-                        treatments_df.loc[mask, 'Попередній діагноз'] = dx
-                        updates += int(mask.sum())
-                        continue
-
-                # Якщо не оновили — додаємо новий рядок, якщо є базовий
-                if base_row is not None:
-                    new_row = base_row.copy()
-                    # Спробуємо заповнити дати
-                    try:
-                        if ds:
-                            new_row['Дата надходження в поточний Л/З'] = pd.to_datetime(ds, format='%d.%m.%Y', errors='coerce')
-                        if de:
-                            new_row['Дата виписки'] = pd.to_datetime(de, format='%d.%m.%Y', errors='coerce')
-                    except Exception:
-                        pass
-                    new_row['Попередній діагноз'] = dx
-                    treatments_df = pd.concat([treatments_df, pd.DataFrame([new_row])], ignore_index=True)
-                    inserts += 1
-
-        # Збереження з бекапом
-        os.makedirs(os.path.join(BASE_DIR, 'backup'), exist_ok=True)
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_path = os.path.join(BASE_DIR, 'backup', f'final_backup_{ts}.xlsx')
-
-        # Визначаємо цільовий файл для збереження
-        target_path = TREATMENTS_FINAL_FILE
-
-        try:
-            if os.path.exists(target_path):
-                # Бекап існуючого файлу
-                try:
-                    import shutil
-                    shutil.copy2(target_path, backup_path)
-                except Exception as e:
-                    logger.warning(f"Не вдалося створити бекап: {e}")
-
-            # Запис у файл
-            treatments_df.to_excel(target_path, index=False)
-
-            # Оновити кеш
-            global treatments_cache, cache_timestamp
-            treatments_cache = treatments_df
-            cache_timestamp = datetime.now()
-        except Exception as e:
-            logger.error(f"Помилка збереження Excel: {e}")
-            return jsonify({'error': f'Помилка збереження Excel: {e}'}), 500
-
-        return jsonify({'updated': updates, 'inserted': inserts, 'saved_to': target_path})
-    except Exception as e:
-        logger.error(f"Помилка застосування епізодів: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/payment-reports', methods=['GET'])
-def payment_reports():
-    """Сторінка звітів по виплатах хворим з пораненнями"""
-    return render_template('payment_reports.html')
-
-@app.route('/api/generate_payment_report', methods=['POST'])
-def generate_payment_report():
-    """API для генерації звіту по виплатах"""
-    try:
-        data = request.get_json()
-        target_units = data.get('target_units', ['2 БОП', '6 БОП'])
-        report_type = data.get('report_type', 'excel')
-        
-        analyzer = PaymentAnalyzer()
-        
-        if report_type == 'excel':
-            # Генеруємо Excel звіт
-            output_file = analyzer.generate_payment_report(target_units, 'excel')
-            
-            # Відправляємо файл
-            return send_file(
-                output_file,
-                as_attachment=True,
-                download_name=f'payment_analysis_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx',
-                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-        else:
-            # Повертаємо JSON з даними
-            results = analyzer.generate_payment_report(target_units, 'json')
-            # Перетворюємо DataFrame в словники для JSON серіалізації
-            if isinstance(results, dict):
-                for unit, data in results.items():
-                    if isinstance(data, dict) and 'combined_data' in data:
-                        # Перетворюємо DataFrame в список словників
-                        if hasattr(data['combined_data'], 'to_dict'):
-                            data['combined_data'] = data['combined_data'].to_dict('records')
-            return jsonify(results)
-            
-    except Exception as e:
-        logger.error(f"Помилка генерації звіту по виплатах: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/search_patient_payments', methods=['GET'])
-def search_patient_payments():
-    """API для пошуку історії виплат пацієнта"""
-    try:
-        patient_name = request.args.get('name', '').strip()
-        if not patient_name:
-            return jsonify({'error': 'Не вказано ім\'я пацієнта'}), 400
-        
-        # Використовуємо нову базу даних
-        patient_info = new_medical_db.get_patient_info(patient_name)
-        
-        if not patient_info:
-            return jsonify({'error': 'Пацієнт не знайдено'}), 404
-        
-        # Формуємо відповідь у зручному форматі
-        response = {
-            'patient': {
-                'full_name': patient_info['full_name'],
-                'rank': patient_info['rank'],
-                'unit_name': patient_info['unit_name']
-            },
-            'treatments': patient_info['treatments'],
-            'payments': patient_info['payments']
-        }
-        
-        return jsonify(convert_to_json_serializable(response))
-        
-    except Exception as e:
-        logger.error(f"Помилка пошуку історії виплат пацієнта: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/monthly_stats/<month>', methods=['GET'])
-def monthly_stats(month):
-    """API для отримання статистики по місяцях"""
-    try:
-        # Використовуємо нову базу даних
-        stats = new_medical_db.get_monthly_payment_stats(month)
-        return jsonify(convert_to_json_serializable(stats))
-        
-    except Exception as e:
-        logger.error(f"Помилка отримання статистики за місяць {month}: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/compare_treatments_payments', methods=['GET'])
-def compare_treatments_payments():
-    """API для порівняння лікування з оплатами"""
-    try:
-        # Використовуємо нову базу даних
-        unit_filter = request.args.get('unit', '').strip()
-        comparison_results = new_medical_db.compare_treatments_with_payments(unit_filter)
-        return jsonify(convert_to_json_serializable(comparison_results))
-    except Exception as e:
-        logger.error(f"Помилка порівняння: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/advanced_search_treatments', methods=['POST'])
-def advanced_search_treatments():
-    """API для розширеного пошуку в даних лікування"""
-    try:
-        search_criteria = request.get_json()
-        if not search_criteria:
-            return jsonify({'error': 'Критерії пошуку не надані'}), 400
-        
-        # Використовуємо нову базу даних
-        results = new_medical_db.advanced_search_patients(search_criteria)
-        
-        # Конвертуємо результати для JSON
-        return jsonify(convert_to_json_serializable(results))
-    except Exception as e:
-        logger.error(f"Помилка розширеного пошуку: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/unpaid-stationary')
-def unpaid_stationary():
-    """Сторінка для генерації звіту по неоплаченим стаціонарам"""
-    return render_template('unpaid_stationary.html')
-
-@app.route('/api/unpaid_stationary_treatments', methods=['GET'])
-def get_unpaid_stationary_treatments():
-    """API для отримання неоплачених стаціонарних лікувань у форматі august_2025.xlsx"""
-    try:
-        month = request.args.get('month', type=int)
-        year = request.args.get('year', type=int)
-        start_month = request.args.get('start_month', type=int)
-        end_month = request.args.get('end_month', type=int)
-        unit_filter = request.args.get('unit', '2 БОП')
-        include_hardcoded = request.args.get('include_hardcoded', 'true').lower() == 'true'
-        
-        # Отримуємо дані у форматі august_2025.xlsx
-        august_data = new_medical_db.get_unpaid_stationary_august_format(
-            month=month, 
-            year=year,
-            start_month=start_month,
-            end_month=end_month,
-            unit_filter=unit_filter,
-            include_hardcoded=include_hardcoded
+        logger.warning(
+            "Прогрів кешу Excel не вдався (дані завантажаться при першому запиті): %s",
+            e,
         )
-        
-        # Підраховуємо загальні показники
-        total_patients = len(august_data)
-        total_days = sum(item['Сумарна кількість днів лікування'] for item in august_data)
-        
-        results = {
-            'total_patients': total_patients,
-            'total_days': total_days,
-            'patients': august_data,
-            'month': month,
-            'year': year,
-            'unit_filter': unit_filter
-        }
-        
-        return jsonify(convert_to_json_serializable(results))
-    except Exception as e:
-        logger.error(f"Помилка отримання неоплачених стаціонарів: {e}")
-        return jsonify({'error': str(e)}), 500
 
-@app.route('/api/test_excel', methods=['GET'])
-def test_excel():
-    """Тестовий endpoint для перевірки Excel генерації"""
-    try:
-        import pandas as pd
-        from io import BytesIO
-        from flask import send_file
-        
-        # Створюємо тестові дані
-        test_data = [
-            {'ПІБ': 'Тест', 'Звання': 'солдат', 'Підрозділ': '2 БОП', 'Дата початку': '2025-01-01', 'Дні': 5, 'Сума': '1000 грн'}
-        ]
-        
-        df = pd.DataFrame(test_data)
-        output = BytesIO()
-        df.to_excel(output, sheet_name='Тест', index=False, engine='openpyxl')
-        output.seek(0)
-        
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name='test.xlsx',
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-    except Exception as e:
-        logger.error(f"Помилка тестового Excel: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/generate_unpaid_excel', methods=['POST'])
-def generate_unpaid_excel():
-    """API для генерації Excel звіту по неоплаченим стаціонарам у форматі august_2025.xlsx"""
-    try:
-        data = request.get_json()
-        month = data.get('month')
-        year = data.get('year')
-        start_month = data.get('start_month')
-        end_month = data.get('end_month')
-        unit_filter = data.get('unit', '2 БОП')
-        
-        # Отримуємо дані у форматі august_2025.xlsx
-        logger.info(f"Параметри запиту: month={month}, year={year}, start_month={start_month}, end_month={end_month}, unit={unit_filter}")
-        
-        august_data = new_medical_db.get_unpaid_stationary_august_format(
-            month=month, 
-            year=year,
-            start_month=start_month,
-            end_month=end_month,
-            unit_filter=unit_filter
-        )
-        
-        logger.info(f"Отримано результатів у форматі august: {len(august_data)}")
-        
-        # Створюємо Excel файл
-        from io import BytesIO
-        import pandas as pd
-        from datetime import datetime
-        
-        # Створюємо DataFrame
-        logger.info(f"Створюємо DataFrame з {len(august_data)} записів")
-        df = pd.DataFrame(august_data)
-        logger.info(f"DataFrame створено успішно. Колонки: {list(df.columns)}")
-        
-        # Створюємо Excel файл в пам'яті
-        output = BytesIO()
-        try:
-            logger.info("Починаємо створення Excel файлу...")
-            
-            # Створюємо Excel файл з автопідбором ширини колонок
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, sheet_name='Неоплачені стаціонари', index=False)
-                
-                # Автопідбір ширини колонок
-                worksheet = writer.sheets['Неоплачені стаціонари']
-                for column in worksheet.columns:
-                    max_length = 0
-                    column_letter = column[0].column_letter
-                    for cell in column:
-                        try:
-                            if len(str(cell.value)) > max_length:
-                                max_length = len(str(cell.value))
-                        except:
-                            pass
-                    adjusted_width = min(max_length + 2, 50)
-                    worksheet.column_dimensions[column_letter].width = adjusted_width
-            
-            logger.info("Excel файл створено успішно!")
-            
-        except Exception as e:
-            logger.error(f"Помилка створення Excel файлу: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
-        
-        output.seek(0)
-        
-        # Формуємо назву файлу
-        month_names = ['січень', 'лютий', 'березень', 'квітень', 'травень', 'червень', 
-                      'липень', 'серпень', 'вересень', 'жовтень', 'листопад', 'грудень']
-        
-        if start_month and end_month:
-            period_name = f"{month_names[start_month-1]}-{month_names[end_month-1]}"
-        elif month:
-            period_name = month_names[month-1]
-        else:
-            period_name = 'всі_місяці'
-        
-        # Використовуємо поточну дату без форматування
-        current_time = datetime.now()
-        timestamp = f"{current_time.year}{current_time.month:02d}{current_time.day:02d}_{current_time.hour:02d}{current_time.minute:02d}{current_time.second:02d}"
-        filename = f'неоплачені_стаціонари_{period_name}_{year}_{timestamp}.xlsx'
-        
-        return send_file(
-            output,
-            as_attachment=True,
-            download_name=filename,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        
-    except Exception as e:
-        logger.error(f"Помилка генерації Excel: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-
-@app.route('/excel_upload', methods=['GET'])
-def excel_upload_page():
-    """Сторінка завантаження Excel файлів"""
-    return render_template('excel_upload.html')
-
-@app.route('/api/upload_excel', methods=['POST'])
-def upload_excel():
-    """API endpoint для завантаження Excel файлу"""
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'error': 'Файл не знайдено'})
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'success': False, 'error': 'Файл не вибрано'})
-        
-        if not (file.filename.lower().endswith('.xlsx') or file.filename.lower().endswith('.xls')):
-            return jsonify({'success': False, 'error': 'Підтримуються тільки Excel файли (.xlsx, .xls)'})
-        
-        # Прапорець імпорту в БД
-        import_to_db = (request.form.get('import_to_db') or '').lower() in ['true', '1', 'yes', 'on']
-
-        # Зберігаємо файл
-        import os
-        import uuid
-        from datetime import datetime
-        
-        upload_dir = 'uploads'
-        if not os.path.exists(upload_dir):
-            os.makedirs(upload_dir)
-        
-        # Генеруємо унікальне ім'я файлу
-        file_id = str(uuid.uuid4())
-        file_extension = os.path.splitext(file.filename)[1]
-        filename = f"{file_id}{file_extension}"
-        file_path = os.path.join(upload_dir, filename)
-        
-        file.save(file_path)
-        
-        # Обробляємо файл
-        result = process_excel_file(file_path, file.filename)
-
-        # Якщо потрібно, імпортуємо в БД
-        if result.get('success') and import_to_db:
-            try:
-                from utils.new_medical_database import NewMedicalDatabase
-                db = NewMedicalDatabase()
-                import_summary = {'inserted': 0, 'updated': 0, 'skipped': 0}
-
-                import pandas as pd
-                df = pd.read_excel(file_path)
-                df.columns = df.columns.astype(str).str.strip()
-
-                # Простий імпорт як лікувань: створюємо пацієнта + діагноз + лікування, якщо вдається прочитати ключові поля
-                for _, row in df.iterrows():
-                    try:
-                        surname = str(row.get('Прізвище', '')).strip()
-                        name = str(row.get("Ім'я", '')).strip()
-                        patronymic = str(row.get('По батькові', '')).strip()
-                        full_name = ' '.join([p for p in [surname, name, patronymic] if p])
-                        if not full_name:
-                            import_summary['skipped'] += 1
-                            continue
-
-                        unit_name = str(row.get('Підрозділ', '')).strip() or None
-                        rank = str(row.get('Військове звання', '')).strip() or None
-                        patient_id = db._get_or_create_patient(full_name, rank, unit_name)
-
-                        preliminary = str(row.get('Попередній діагноз', '')).strip() or None
-                        final = str(row.get('Заключний діагноз', '')).strip() or None
-                        is_combat = str(row.get('Бойова/ небойова', '')).strip().lower() == 'бойова'
-                        diagnosis_id = db._get_or_create_diagnosis(preliminary, final, is_combat)
-
-                        treatment_type = str(row.get('Вид лікування', '')).strip() or 'Стаціонар'
-                        hospital_place = str(row.get('Місце госпіталізації', '')).strip() or None
-                        primary_date = str(row.get('Дата надходження в поточний Л/З', '')).strip() or None
-                        discharge_date = str(row.get('Дата виписки', '')).strip() or None
-                        injury_date = None
-                        treatment_days = None
-                        treatment_result = str(row.get('Результат лікування', '')).strip() or None
-
-                        cursor = db._get_connection().cursor()
-                        cursor.execute(
-                            """
-                            INSERT INTO treatments (
-                                patient_id, diagnosis_id, treatment_type, hospital_place,
-                                primary_hospitalization_date, discharge_date, injury_date,
-                                treatment_days, treatment_result, is_combat
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                patient_id, diagnosis_id, treatment_type, hospital_place,
-                                primary_date, discharge_date, injury_date,
-                                treatment_days, treatment_result, 1 if is_combat else 0
-                            ),
-                        )
-                        db._get_connection().commit()
-                        import_summary['inserted'] += 1
-                    except Exception:
-                        import_summary['skipped'] += 1
-                        continue
-
-                # Додаємо підсумок до details
-                result.setdefault('details', {})
-                result['details']['importSummary'] = import_summary
-            except Exception as ie:
-                result.setdefault('details', {})
-                result['details']['importSummary'] = {'inserted': 0, 'updated': 0, 'skipped': 0}
-        
-        if result['success']:
-            return jsonify({
-                'success': True,
-                'message': 'Файл успішно оброблено',
-                'details': result['details']
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': result['error']
-            })
-            
-    except Exception as e:
-        logger.error(f"Помилка завантаження Excel файлу: {e}")
-        return jsonify({'success': False, 'error': str(e)})
-
-def process_excel_file(file_path, original_filename):
-    """
-    Обробляє Excel файл і додає дані до бази даних
-    
-    Args:
-        file_path (str): Шлях до файлу
-        original_filename (str): Оригінальна назва файлу
-        
-    Returns:
-        dict: Результат обробки
-    """
-    try:
-        import pandas as pd
-        from datetime import datetime
-        import time
-        
-        start_time = time.time()
-        
-        # Читаємо Excel файл
-        df = pd.read_excel(file_path)
-        
-        # Очищаємо назви колонок
-        df.columns = df.columns.astype(str).str.strip()
-        
-        # Логуємо інформацію про файл
-        logger.info(f"Обробка файлу: {original_filename}")
-        logger.info(f"Розмір: {len(df)} записів, {len(df.columns)} колонок")
-        logger.info(f"Колонки: {list(df.columns)}")
-        
-        # Підготовка огляду даних (без змін у БД)
-        # Нормалізуємо дати в рядки, щоб уникнути NaT/JSON проблем
-        import numpy as np
-        from pandas.api.types import is_datetime64_any_dtype as is_dt
-        sample_df = df.head(5).copy()
-        for col in sample_df.columns:
-            try:
-                if is_dt(sample_df[col]):
-                    sample_df[col] = sample_df[col].dt.strftime('%Y-%m-%d')
-                # Якщо колонки схожі на дати за назвою, спробуємо сконвертувати для превʼю
-                elif any(k in str(col).lower() for k in ['дата', 'date']):
-                    coerced = pd.to_datetime(sample_df[col], errors='coerce')
-                    sample_df[col] = coerced.dt.strftime('%Y-%m-%d')
-            except Exception:
-                # Якщо конвертація не вдалася, залишаємо як є
-                pass
-        # Замінюємо NaN/NaT на порожній рядок
-        sample_rows = sample_df.replace({np.nan: ''}).to_dict(orient='records')
-        
-        # Евристичне визначення мапінгу колонок до полів БД
-        column_names_lower = {c.lower(): c for c in df.columns}
-        def pick(*options):
-            for opt in options:
-                if opt in column_names_lower:
-                    return column_names_lower[opt]
-            return None
-        inferred_mapping = {
-            'last_name': pick('прізвище', 'фамилия', 'прізвище/імʼя', 'surname', 'last name'),
-            'first_name': pick('імʼя', 'имя', 'імя', 'name', 'first name'),
-            'middle_name': pick('по батькові', 'по-батькові', 'отчество', 'middle name'),
-            'unit': pick('підрозділ', 'подразделение', 'unit', 'рота', 'батальйон'),
-            'diagnosis': pick('діагноз', 'диагноз', 'diagnosis'),
-            'start_date': pick('дата початку', 'дата початок', 'date start', 'start date', 'from', 'з'),
-            'end_date': pick('дата закінчення', 'дата кінець', 'date end', 'end date', 'to', 'по'),
-            'hospital': pick('заклад', 'лікарня', 'больница', 'hospital'),
-            'payment_status': pick('статус оплати', 'оплата', 'payment status')
-        }
-        
-        # Пошук можливих колонок дат і базова валідація
-        possible_date_cols = [c for c in df.columns if any(k in c.lower() for k in ['дата', 'date'])]
-        date_parse_issues = {}
-        for c in possible_date_cols:
-            try:
-                pd.to_datetime(df[c], errors='raise')
-            except Exception as err:
-                date_parse_issues[c] = str(err)[:200]
-        
-        # Прості числові колонки (для швидкої статистики)
-        numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-        def _safe_float(value):
-            try:
-                if value is None:
-                    return None
-                f = float(value)
-                if np.isnan(f) or np.isinf(f):
-                    return None
-                return f
-            except Exception:
-                return None
-
-        numeric_stats = {}
-        for c in numeric_cols[:8]:  # обмежимо до 8 колонок для відповіді
-            col = df[c]
-            numeric_stats[c] = {
-                'min': _safe_float(col.min() if len(col) else None),
-                'max': _safe_float(col.max() if len(col) else None),
-                'mean': _safe_float(col.mean() if len(col) else None),
-                'nonNull': int(col.notna().sum()),
-            }
-        
-        processing_time = time.time() - start_time
-        
-        return {
-            'success': True,
-            'details': {
-                'records': len(df),
-                'columns': len(df.columns),
-                'processingTime': f"{processing_time:.2f}s",
-                'filename': original_filename,
-                'sampleRows': sample_rows,
-                'inferredMapping': inferred_mapping,
-                'possibleDateColumns': possible_date_cols,
-                'dateParseIssues': date_parse_issues,
-                'numericStats': numeric_stats
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Помилка обробки Excel файлу {original_filename}: {e}")
-        return {
-            'success': False,
-            'error': str(e)
-        }
-
-@app.route('/api/import_treatments_excel', methods=['POST'])
-def import_treatments_excel():
-    """Імпорт лікувань з Excel з мапінгом колонок.
-    Очікує multipart/form-data: file (excel), mapping (JSON string)
-    """
-    try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'Файл не надіслано'}), 400
-        import json
-        mapping_raw = request.form.get('mapping', '{}')
-        mapping = json.loads(mapping_raw) if mapping_raw else {}
-        f = request.files['file']
-        import pandas as pd
-        df = pd.read_excel(f)
-        result = new_medical_db.import_treatments_generic(df, mapping)
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Помилка імпорту лікувань: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/import_payments_excel', methods=['POST'])
-def import_payments_excel():
-    """Імпорт оплат з Excel з мапінгом колонок.
-    Очікує multipart/form-data: file (excel), mapping (JSON string)
-    """
-    try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'Файл не надіслано'}), 400
-        import json
-        mapping_raw = request.form.get('mapping', '{}')
-        mapping = json.loads(mapping_raw) if mapping_raw else {}
-        f = request.files['file']
-        import pandas as pd
-        df = pd.read_excel(f)
-        source_file = request.form.get('source_file') or f.filename
-        result = new_medical_db.import_payments_generic(df, mapping, source_file)
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Помилка імпорту оплат: {e}")
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    try:
-        app.run(debug=DEBUG)
-    finally:
-        # Закриваємо з'єднання з базою даних
-        new_medical_db.close()
+    threading.Thread(target=_warmup_treatments_cache, daemon=True).start()
+    app.run(debug=DEBUG)

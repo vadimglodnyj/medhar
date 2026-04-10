@@ -15,6 +15,10 @@ def _normalize_year(year_str: str) -> str:
 def extract_injury_date(text: str) -> Optional[str]:
     if not text:
         return None
+    # Переконуємося, що text є рядком (не float/NaN)
+    text = str(text) if text else ''
+    if not text:
+        return None
     # Take the last date in the text as injury date (often appears after time range)
     matches = list(DATE_REGEX.finditer(text))
     if not matches:
@@ -25,6 +29,10 @@ def extract_injury_date(text: str) -> Optional[str]:
 
 
 def extract_location(text: str) -> Optional[str]:
+    if not text:
+        return None
+    # Переконуємося, що text є рядком (не float/NaN)
+    text = str(text) if text else ''
     if not text:
         return None
     # Prefer "район н.п. <NAME>"
@@ -63,6 +71,10 @@ def _convert_to_genitive_case(factor: str) -> str:
 def extract_factor(text: str) -> Optional[str]:
     if not text:
         return None
+    # Переконуємося, що text є рядком (не float/NaN)
+    text = str(text) if text else ''
+    if not text:
+        return None
     # Common factors
     factor_patterns = [
         r"мінометн\w*\s+обстріл\w*",
@@ -81,6 +93,10 @@ def extract_factor(text: str) -> Optional[str]:
 
 
 def parse_circumstances(text: str) -> Dict[str, Optional[str]]:
+    # Переконуємося, що text є рядком (не float/NaN)
+    if text is None:
+        text = ''
+    text = str(text) if text else ''
     return {
         "injury_date": extract_injury_date(text),
         "location": extract_location(text),

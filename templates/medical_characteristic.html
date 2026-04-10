@@ -1,6 +1,28 @@
 {% extends "base.html" %} {% block title %}Медична характеристика - МедХар{%
 endblock %} {% block content %}
-<div class="container">
+<div class="container position-relative">
+  <div
+    id="treatments-preload-overlay"
+    class="treatments-preload-overlay"
+    aria-live="polite"
+    aria-busy="true"
+  >
+    <div class="treatments-preload-inner card shadow">
+      <div class="spinner-border text-primary mb-3" role="status">
+        <span class="visually-hidden">Завантаження…</span>
+      </div>
+      <p id="treatments-preload-msg" class="mb-2 text-center">
+        Завантаження бази Excel…
+      </p>
+      <button
+        type="button"
+        id="treatments-preload-dismiss"
+        class="btn btn-sm btn-outline-secondary d-none"
+      >
+        Продовжити без очікування
+      </button>
+    </div>
+  </div>
   <div class="row justify-content-center">
     <div class="col-lg-8">
       <div class="page-header text-center">
@@ -20,6 +42,65 @@ endblock %} {% block content %}
             <strong>База даних:</strong>
             <span id="stats-text">Завантаження...</span>
           </p>
+        </div>
+      </div>
+
+      <!-- Оновлення файлу treatments_YYYY.xlsx -->
+      <div class="card mb-4" id="treatments-upload-card">
+        <div class="card-header bg-secondary text-white">
+          <h6 class="mb-0">
+            <i class="fas fa-file-upload me-2"></i>Оновити базу за рік (Excel)
+          </h6>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2" id="treatments-sources-text">
+            Завантаження списку файлів…
+          </p>
+          <form id="treatments-upload-form" class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label" for="treatments-upload-year">Рік</label>
+              <input
+                type="number"
+                class="form-control"
+                id="treatments-upload-year"
+                name="year"
+                min="1990"
+                max="2100"
+                required
+              />
+            </div>
+            <div class="col-md-5">
+              <label class="form-label" for="treatments-upload-file"
+                >Файл .xlsx</label
+              >
+              <input
+                type="file"
+                class="form-control"
+                id="treatments-upload-file"
+                name="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                required
+              />
+            </div>
+            <div class="col-md-4">
+              <button
+                type="submit"
+                class="btn btn-secondary w-100"
+                id="treatments-upload-btn"
+              >
+                <i class="fas fa-save me-1"></i>Замінити файл на диску
+              </button>
+            </div>
+          </form>
+          <p class="small text-muted mt-2 mb-0">
+            Після перевірки старий файл обраного року замінюється новим; кеш
+            даних оновлюється автоматично.
+          </p>
+          <div
+            id="treatments-upload-alert"
+            class="alert d-none mt-2 mb-0"
+            role="alert"
+          ></div>
         </div>
       </div>
 
@@ -310,6 +391,30 @@ endblock %} {% block content %}
   .autocomplete-suggestion:last-child {
     border-bottom: none;
   }
+
+  .treatments-preload-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 4rem;
+    background: rgba(240, 248, 255, 0.92);
+    backdrop-filter: blur(2px);
+  }
+
+  .treatments-preload-inner {
+    padding: 2rem 2.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 22rem;
+  }
+
+  .treatments-preload-overlay.treatments-preload--error .spinner-border {
+    display: none;
+  }
 </style>
 {% endblock %} {% block extra_js %}
 <script>
@@ -321,6 +426,63 @@ endblock %} {% block content %}
 
   let currentSuggestions = [];
   let selectedIndex = -1;
+  /** Пошук ПІБ лише після готовності кешу на сервері (або після зняття оверлею). */
+  window.__treatmentsReady = false;
+
+  async function waitForTreatmentsReady() {
+    const overlay = document.getElementById("treatments-preload-overlay");
+    const msg = document.getElementById("treatments-preload-msg");
+    const dismissBtn = document.getElementById("treatments-preload-dismiss");
+    const maxWaitMs = 120000;
+    const t0 = Date.now();
+
+    const hideOverlay = () => {
+      overlay.style.display = "none";
+      overlay.setAttribute("aria-busy", "false");
+    };
+
+    dismissBtn.addEventListener("click", () => {
+      window.__treatmentsReady = true;
+      hideOverlay();
+      loadDatabaseStats();
+    });
+
+    for (;;) {
+      if (Date.now() - t0 > maxWaitMs) {
+        msg.textContent =
+          "Завантаження триває надто довго. Спробуйте оновити сторінку або натисніть кнопку нижче.";
+        dismissBtn.classList.remove("d-none");
+        break;
+      }
+      try {
+        const response = await fetch("/api/treatments_ready");
+        if (!response.ok) throw new Error(String(response.status));
+        const j = await response.json();
+        if (j.ready) {
+          window.__treatmentsReady = true;
+          hideOverlay();
+          return;
+        }
+        if (j.error && !j.loading) {
+          overlay.classList.add("treatments-preload--error");
+          msg.textContent =
+            "Не вдалося завантажити базу. Перевірте файли Excel у папці проєкту. " +
+            (j.error || "");
+          dismissBtn.classList.remove("d-none");
+          break;
+        }
+        msg.textContent = j.loading
+          ? "Завантаження бази Excel…"
+          : "Підготовка пошуку…";
+      } catch (e) {
+        console.error(e);
+        msg.textContent = "Не вдалося зв’язатися з сервером. Оновіть сторінку.";
+        dismissBtn.classList.remove("d-none");
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
 
   // Завантаження статистики бази даних
   async function loadDatabaseStats() {
@@ -347,8 +509,101 @@ endblock %} {% block content %}
     }
   }
 
-  // Завантажуємо статистику при завантаженні сторінки
-  document.addEventListener("DOMContentLoaded", loadDatabaseStats);
+  /** Якщо кеш з’явився після /api/stats (наприклад, після невдалого прогріву), прибираємо оверлей. */
+  async function syncPreloadOverlayWithServer() {
+    try {
+      const response = await fetch("/api/treatments_ready");
+      if (!response.ok) return;
+      const j = await response.json();
+      if (j.ready) {
+        window.__treatmentsReady = true;
+        const overlay = document.getElementById("treatments-preload-overlay");
+        if (overlay) {
+          overlay.style.display = "none";
+          overlay.setAttribute("aria-busy", "false");
+          overlay.classList.remove("treatments-preload--error");
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function loadTreatmentsSources() {
+    const el = document.getElementById("treatments-sources-text");
+    const yearInput = document.getElementById("treatments-upload-year");
+    if (!el) return;
+    try {
+      const r = await fetch("/api/treatments_sources");
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      const names = (d.year_files || []).map((x) => x.filename).join(", ");
+      let line = "";
+      if (names) {
+        line = `Підключені річні файли: ${names}`;
+        if (d.has_final) line += " + treatments_final.xlsx";
+      } else if (d.has_final) {
+        line =
+          "Лише treatments_final.xlsx (за потреби додайте treatments_YYYY.xlsx у папку data/)";
+      } else {
+        line =
+          "Немає файлів — додайте у data/ файли treatments_YYYY.xlsx або treatments_final.xlsx";
+      }
+      el.textContent = line;
+      if (yearInput && yearInput.dataset.touched !== "1") {
+        yearInput.value = d.calendar_year;
+      }
+    } catch (e) {
+      console.error(e);
+      el.textContent = "Не вдалося отримати список файлів.";
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    loadTreatmentsSources();
+    document.getElementById("treatments-upload-year")?.addEventListener("input", function () {
+      this.dataset.touched = "1";
+    });
+    document
+      .getElementById("treatments-upload-form")
+      ?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("treatments-upload-btn");
+        const alertEl = document.getElementById("treatments-upload-alert");
+        const fd = new FormData(e.target);
+        alertEl.classList.add("d-none");
+        btn.disabled = true;
+        try {
+          const r = await fetch("/api/treatments_upload", {
+            method: "POST",
+            body: fd,
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || !j.ok) {
+            alertEl.textContent = j.error || `Помилка ${r.status}`;
+            alertEl.className = "alert alert-danger mt-2 mb-0";
+            alertEl.classList.remove("d-none");
+            return;
+          }
+          alertEl.textContent = `Збережено ${j.filename} (${j.rows} рядків).`;
+          alertEl.className = "alert alert-success mt-2 mb-0";
+          alertEl.classList.remove("d-none");
+          await loadTreatmentsSources();
+          await loadDatabaseStats();
+        } catch (err) {
+          console.error(err);
+          alertEl.textContent =
+            "Мережева помилка або сервер недоступний.";
+          alertEl.className = "alert alert-danger mt-2 mb-0";
+          alertEl.classList.remove("d-none");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+    waitForTreatmentsReady().then(async () => {
+      await loadDatabaseStats();
+      await syncPreloadOverlayWithServer();
+    });
+  });
 
   function getCookie(name) {
     let a = `; ${document.cookie}`.match(`;\\s*${name}=([^;]+)`);
@@ -357,6 +612,10 @@ endblock %} {% block content %}
 
   // Функція для пошуку ПІБ
   async function searchPIB(query) {
+    if (!window.__treatmentsReady) {
+      hideSuggestions();
+      return;
+    }
     if (query.length < 2) {
       hideSuggestions();
       return;
