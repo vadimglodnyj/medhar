@@ -47,21 +47,6 @@ python app.py
 
 Відкрити в браузері: [http://127.0.0.1:5000/medical-characteristic](http://127.0.0.1:5000/medical-characteristic)
 
-## API (для форми та інтеграцій)
-
-| Метод | Шлях | Опис |
-|--------|------|------|
-| `GET` | `/` | Редірект на `/medical-characteristic` |
-| `GET`, `POST` | `/medical-characteristic` | Форма та генерація DOCX |
-| `GET` | `/api/treatments_ready` | Статус прогріву кешу (`ready`, `loading`, `error`) |
-| `GET` | `/api/treatments_sources` | Список знайдених `treatments_YYYY.xlsx`, наявність `treatments_final` |
-| `POST` | `/api/treatments_upload` | Форма: `file` (.xlsx), `year` (опційно) — заміна файлу року |
-| `GET` | `/api/search_pib?q=...` | Підказки по ПІБ |
-| `GET` | `/api/stats` | Кількість записів і унікальних пацієнтів |
-
-## Безпека та продакшен
-
-У `config.py` змініть `SECRET_KEY` на випадковий рядок і вимкніть `DEBUG` для публічного сервера. Завантаження Excel не захищені окремою авторизацією — розраховано на локальну / довірену мережу.
 
 ## Типові проблеми
 
