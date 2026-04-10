@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Скрипт для встановлення залежностей медичного додатку
+Встановлення залежностей: лише requirements.txt (мінімум для python app.py).
+На Windows зручніше: start_medchar.bat у корені проєкту.
 """
 
 import sys
 import os
 import subprocess
 import platform
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _req_path(filename: str) -> str:
+    return os.path.join(BASE_DIR, filename)
+
 
 def check_python_version():
     """Перевіряє версію Python"""
@@ -18,158 +26,96 @@ def check_python_version():
     print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     return True
 
-def install_core_packages():
-    """Встановлює основні пакети по одному"""
-    print("📦 Встановлення основних пакетів...")
-    
-    # Список основних пакетів в порядку залежностей
-    packages = [
-        "setuptools",
-        "wheel", 
-        "pip",
-        "numpy",
-        "Flask",
-        "pandas",
-        "python-docx",
-        "docxtpl",
-        "openpyxl",
-        "pymorphy3",
-        "pymorphy3-dicts-uk",
-        "Werkzeug",
-        "requests",
-        "beautifulsoup4",
-        "python-dotenv"
-    ]
-    
-    failed_packages = []
-    
-    for package in packages:
-        try:
-            print(f"📦 Встановлення {package}...")
-            result = subprocess.run([
-                sys.executable, "-m", "pip", "install", 
-                package, "--upgrade", "--no-cache-dir"
-            ], check=True, capture_output=True, text=True)
-            print(f"✅ {package} встановлено успішно")
-            
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Помилка встановлення {package}: {e}")
-            if e.stderr:
-                print(f"STDERR: {e.stderr}")
-            failed_packages.append(package)
-    
-    if failed_packages:
-        print(f"⚠️  Не вдалося встановити: {', '.join(failed_packages)}")
-        return False
-    
-    print("✅ Всі основні пакети встановлено успішно!")
-    return True
 
-def install_optional_packages():
-    """Встановлює опціональні пакети"""
-    print("📦 Встановлення опціональних пакетів...")
-    
-    optional_packages = [
-        "pdf2image",
-        "pypdf", 
-        "Pillow",
-        "easyocr",
-        "pytesseract"
-    ]
-    
-    for package in optional_packages:
-        try:
-            print(f"📦 Встановлення {package}...")
-            subprocess.run([
-                sys.executable, "-m", "pip", "install", 
-                package, "--upgrade", "--no-cache-dir"
-            ], check=True, capture_output=True)
-            print(f"✅ {package} встановлено успішно")
-            
-        except subprocess.CalledProcessError as e:
-            print(f"⚠️  Не вдалося встановити {package} (опціональний): {e}")
-            print("Продовжуємо без цього пакета...")
+def install_from_requirements():
+    path = _req_path("requirements.txt")
+    if not os.path.isfile(path):
+        print(f"❌ Не знайдено файл: {path}")
+        return False
+    print("📦 Встановлення з requirements.txt")
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                path,
+                "--upgrade",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("✅ requirements.txt встановлено успішно")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Помилка pip: {e}")
+        if e.stderr:
+            print(e.stderr)
+        return False
+
 
 def check_system_requirements():
-    """Перевіряє системні вимоги"""
     print("🔍 Перевірка системних вимог...")
-    
-    # Перевіряємо операційну систему
-    system = platform.system()
-    print(f"🖥️  ОС: {system}")
-    
-    # Перевіряємо архітектуру
-    arch = platform.machine()
-    print(f"🏗️  Архітектура: {arch}")
-    
-    # Перевіряємо наявність git
+    print(f"🖥️  ОС: {platform.system()}")
+    print(f"🏗️  Архітектура: {platform.machine()}")
     try:
         subprocess.run(["git", "--version"], check=True, capture_output=True)
         print("✅ Git встановлено")
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("⚠️  Git не знайдено (не обов'язково)")
-    
     return True
 
+
 def create_virtual_environment():
-    """Створює віртуальне середовище"""
     print("🐍 Створення віртуального середовища...")
-    
     if os.path.exists("venv"):
         print("✅ Віртуальне середовище вже існує")
         return True
-    
     try:
         subprocess.run([sys.executable, "-m", "venv", "venv"], check=True)
         print("✅ Віртуальне середовище створено")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Помилка створення віртуального середовища: {e}")
+        print(f"❌ Помилка створення venv: {e}")
         return False
 
+
 def main():
-    """Головна функція встановлення"""
-    print("🏥 ВСТАНОВЛЕННЯ МЕДИЧНОГО ДОДАТКУ")
+    print("🏥 ВСТАНОВЛЕННЯ МЕДХАР (лише мінімальні залежності)")
     print("=" * 50)
-    
-    # Перевіряємо Python
+
     if not check_python_version():
         return 1
-    
-    # Перевіряємо системні вимоги
     if not check_system_requirements():
         return 1
-    
-    # Створюємо віртуальне середовище
     if not create_virtual_environment():
         return 1
-    
-    # Оновлюємо pip
+
     try:
         print("🔄 Оновлення pip...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], 
-                      check=True, capture_output=True)
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
+            check=True,
+            capture_output=True,
+        )
         print("✅ pip оновлено")
     except subprocess.CalledProcessError as e:
         print(f"⚠️  Не вдалося оновити pip: {e}")
-    
-    # Встановлюємо основні пакети
-    if not install_core_packages():
-        print("❌ Не вдалося встановити основні пакети")
+
+    if not install_from_requirements():
         return 1
-    
-    # Встановлюємо опціональні пакети
-    install_optional_packages()
-    
-    print("\n🎉 ВСТАНОВЛЕННЯ ЗАВЕРШЕНО!")
+
+    print("\n🎉 ГОТОВО")
     print("=" * 50)
-    print("📋 Наступні кроки:")
-    print("1. Додайте папку 'data/' з Excel файлами")
-    print("2. Запустіть додаток: python app.py")
-    print("3. Відкрийте браузер: http://127.0.0.1:5000")
+    print("1. Покладіть Excel у папку data/ (поруч із app.py)")
+    print("2. Запуск: start_medchar.bat  або  venv\\Scripts\\activate  →  python app.py")
+    print("3. Браузер: http://127.0.0.1:5000/ — інструкція та форма")
     print("=" * 50)
-    
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

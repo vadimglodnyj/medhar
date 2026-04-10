@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}МедХар — як почати{% endblock %}
+{% block content %}
+<div class="container py-4">
+  <div class="row justify-content-center">
+    <div class="col-lg-9">
+      <div class="text-center mb-4">
+        <h1 class="display-6">
+          <i class="fas fa-hand-sparkles text-primary me-2"></i>Вітаємо в МедХар
+        </h1>
+        <p class="lead text-muted mb-0">
+          Локальна генерація медичної характеристики з Excel. Нижче — коротка інструкція.
+        </p>
+      </div>
+
+      {% if data_ready %}
+      <div class="alert alert-success d-flex align-items-center" role="alert">
+        <i class="fas fa-check-circle fa-lg me-3"></i>
+        <div>
+          У папці <code>data</code> знайдено файли бази (Excel). Можна переходити до форми.
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-warning d-flex align-items-start" role="alert">
+        <i class="fas fa-folder-open fa-lg me-3 mt-1"></i>
+        <div>
+          <strong>Папка з даними.</strong> Каталог
+          <code>data</code> створюється автоматично при запуску програми (поруч із
+          <code>app.py</code>). Покладіть туди хоча б один файл Excel з лікуваннями —
+          див. таблицю нижче. Без цього пошук ПІБ і генерація не працюватимуть.
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+          <h2 class="h5 mb-0">
+            <i class="fas fa-database me-2"></i>Що покласти в папку <code>data</code>
+          </h2>
+        </div>
+        <div class="card-body">
+          <p class="mb-3">
+            Шлях на вашому комп’ютері (для орієнтації):
+            <code class="user-select-all">{{ data_dir }}</code>
+          </p>
+          <div class="table-responsive">
+            <table class="table table-bordered mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Файл</th>
+                  <th>Опис</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>treatments_YYYY.xlsx</code></td>
+                  <td>
+                    Річна база: у назві рік з 4 цифр, наприклад
+                    <code>treatments_2026.xlsx</code>. Можна кілька років одночасно.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="small text-muted mt-3 mb-0">
+            Потрібні колонки: <strong>Прізвище, Ім'я, По батькові</strong> або колонка
+            <strong>ПІБ</strong>. Файли <code>*.xlsx</code> у <code>data</code> не
+            потрапляють у git — їх додаєте лише у себе на диску.
+          </p>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header bg-info text-white">
+          <h2 class="h5 mb-0">
+            <i class="fas fa-download me-2"></i>Встановлення (мінімум для роботи)
+          </h2>
+        </div>
+        <div class="card-body">
+          <ol class="mb-0">
+            <li class="mb-2">
+              Встановіть <strong>Python 3.8+</strong> з
+              <a href="https://www.python.org/downloads/" target="_blank" rel="noopener"
+                >python.org</a
+              >
+              і у вікні інсталятора увімкніть <strong>Add python.exe to PATH</strong>.
+            </li>
+            <li class="mb-2">
+              <strong>Windows:</strong> подвійний клік на
+              <code>start_medchar.bat</code> — створиться <code>venv</code> і
+              встановляться залежності з <code>requirements.txt</code> (лише те, що
+              потрібно для цієї програми).
+            </li>
+            <li class="mb-2">
+              <strong>Вручну:</strong>
+              <code>python -m venv venv</code> → активуйте venv →
+              <code>pip install -r requirements.txt</code> →
+              <code>python app.py</code>.
+            </li>
+            <li>
+              Відкрийте в браузері цю сторінку або одразу
+              <a href="{{ url_for('medical_characteristic') }}"
+                >форму медичної характеристики</a
+              >.
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="text-center">
+        <a
+          class="btn btn-primary btn-lg px-5"
+          href="{{ url_for('medical_characteristic') }}"
+        >
+          <i class="fas fa-file-medical me-2"></i>До форми генерації
+        </a>
+        <p class="small text-muted mt-3 mb-0">
+          Після копіювання файлів у <code>data</code> оновіть сторінку (F5), щоб
+          зникло попередження.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

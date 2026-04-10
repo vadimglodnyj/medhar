@@ -9,62 +9,9 @@ import shutil
 import tempfile
 import threading
 import pandas as pd
-import numpy as np
-from flask import Flask, render_template, request, send_file, make_response, flash, redirect, url_for, jsonify
+from flask import Flask, render_template, request, send_file, make_response, flash, jsonify
 from werkzeug.utils import secure_filename
 
-def convert_to_json_serializable(obj):
-    """Конвертує об'єкти pandas/numpy в JSON-сумісні типи"""
-    if isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif pd.isna(obj):
-        return None
-    else:
-        return obj
-
-def parse_treatment_days(days_value):
-    """Парсить кількість днів лікування з очищенням від зайвих символів"""
-    if days_value is None:
-        return 0
-    try:
-        # Очищаємо від переносів рядків та зайвих символів
-        days_str = str(days_value).strip()
-        
-        # Якщо є переноси рядків, це означає детальну інформацію про лікування
-        if '\n' in days_str or '\r' in days_str:
-            # Розбиваємо по рядках
-            lines = days_str.replace('\r', '\n').split('\n')
-            
-            # Шукаємо рядок з загальною кількістю днів
-            # Зазвичай це перший рядок або рядок з найбільшим числом
-            total_days = 0
-            for line in lines:
-                line = line.strip()
-                if line:
-                    # Шукаємо числа в рядку
-                    import re
-                    numbers = re.findall(r'\d+(?:\.\d+)?', line)
-                    if numbers:
-                        # Беремо перше число як потенційну загальну кількість днів
-                        try:
-                            days = float(numbers[0])
-                            if days > total_days:  # Беремо найбільше число як загальну кількість
-                                total_days = days
-                        except (ValueError, TypeError):
-                            continue
-            
-            return total_days
-        else:
-            # Якщо немає переносів рядків, просто парсимо число
-            days_str = days_str.replace('\n', ' ').replace('\r', ' ')
-            days_str = days_str.split()[0] if days_str.split() else '0'
-            return float(days_str)
-    except (ValueError, TypeError, IndexError):
-        return 0
 from docxtpl import DocxTemplate
 from docx import Document as DocxDocument
 from docx.text.paragraph import Paragraph as DocxParagraph
@@ -91,6 +38,12 @@ from utils.ukrainian_pib_genitive import (
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
+# Порожня папка даних — щоб користувач міг одразу покласти Excel
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except OSError:
+    pass
+
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -103,10 +56,6 @@ treatments_cache_file_signature = None
 _treatments_load_lock = threading.Lock()
 treatments_load_in_progress = False
 treatments_last_load_error = None
-
-# Пам'ять для результатів з PDF (ключ: ПІБ_чисте)
-pdf_overrides = {}
-
 
 def _excel_cell_str(value, default=""):
     """Текст з комірки Excel/pandas без 'nan' у рядку."""
@@ -739,10 +688,21 @@ def search_pib():
         logger.error(f"Помилка при пошуку ПІБ: {e}")
         return jsonify({'results': [], 'error': str(e)})
 
-@app.route('/', methods=['GET', 'POST'])
+def _welcome_template_context():
+    """Контекст вітальної сторінки: чи є Excel у data/."""
+    has_files = bool(list_treatments_year_files_sorted()) or os.path.isfile(
+        TREATMENTS_FINAL_FILE
+    )
+    return {
+        "data_ready": has_files,
+        "data_dir": os.path.abspath(DATA_DIR),
+    }
+
+
+@app.route('/', methods=['GET'])
 def index():
-    """Головна сторінка: одразу на генерацію медичної характеристики."""
-    return redirect(url_for('medical_characteristic'))
+    """Вітальна сторінка з інструкцією щодо data/ та встановлення."""
+    return render_template('welcome.html', **_welcome_template_context())
 
 @app.route('/medical-characteristic', methods=['GET', 'POST'])
 def medical_characteristic():
@@ -833,85 +793,29 @@ def medical_characteristic():
         pib_nazivnyi_clean = re.sub(r'\s+', ' ', pib_nazivnyi).strip().lower()
         soldier_records = treatments_df[treatments_df['ПІБ_чисте'] == pib_nazivnyi_clean]
 
-        # Інтегруємо можливі оновлення з PDF (за пріоритетом над Excel)
-        pdf_episodes = pdf_overrides.get(pib_nazivnyi_clean)
         context = {}
-        
+
         if not soldier_records.empty:
             first_record = soldier_records.iloc[0]
             kategoriia = first_record['Категорія']
             birth_date_obj = first_record['Дата народження']
             try:
                 birth_date_str = birth_date_obj.strftime('%d.%m.%Y') if pd.notna(birth_date_obj) else "[дата не вказана]"
-            except:
+            except Exception:
                 birth_date_str = "[дата не вказана]"
             context = {
                 'zvanie': first_record['Військове звання'],
                 'sluzhba_type': 'за контрактом' if 'контр' in str(kategoriia).lower() else 'під час мобілізації',
                 'birth_date': birth_date_str,
+                'treatment_history': format_treatment_history(soldier_records, hide_diagnosis_flag),
             }
-            # Якщо є епізоди з PDF, оновлюємо діагнози/епізоди виводу
-            if pdf_episodes:
-                # Готуємо копію для виводу
-                df_copy = soldier_records.copy()
-                try:
-                    # Оновлюємо або додаємо епізоди за датами
-                    for ep in pdf_episodes:
-                        ds = ep.get('date_start')
-                        de = ep.get('date_end')
-                        dx = ep.get('diagnosis') or ''
-                        # Підбір запису з такими ж датами
-                        if ds and de and 'Дата надходження в поточний Л/З' in df_copy.columns and 'Дата виписки' in df_copy.columns:
-                            # Порівнюємо як рядок dd.mm.yyyy
-                            mask = (
-                                df_copy['Дата надходження в поточний Л/З'].dt.strftime('%d.%m.%Y') == ds
-                            ) & (
-                                df_copy['Дата виписки'].dt.strftime('%d.%m.%Y') == de
-                            )
-                            if mask.any():
-                                df_copy.loc[mask, 'Попередній діагноз'] = dx
-                            else:
-                                # Додаємо новий епізод мінімально необхідними полями
-                                new_row = first_record.copy()
-                                try:
-                                    new_row['Дата надходження в поточний Л/З'] = pd.to_datetime(ds, format='%d.%m.%Y', errors='coerce')
-                                    new_row['Дата виписки'] = pd.to_datetime(de, format='%d.%m.%Y', errors='coerce')
-                                except Exception:
-                                    pass
-                                new_row['Попередній діагноз'] = dx
-                                df_copy = pd.concat([df_copy, pd.DataFrame([new_row])], ignore_index=True)
-                        elif dx:
-                            # Якщо немає дат — принаймні замінимо діагноз першого запису
-                            df_copy.loc[df_copy.index[:1], 'Попередній діагноз'] = dx
-                except Exception as _e:
-                    logger.warning(f"Не вдалося інтегрувати епізоди PDF: {_e}")
-                context['treatment_history'] = format_treatment_history(df_copy, hide_diagnosis_flag)
-            else:
-                context['treatment_history'] = format_treatment_history(soldier_records, hide_diagnosis_flag)
         else:
             context = {
                 'zvanie': request.form.get('zvanie'),
                 'sluzhba_type': request.form.get('sluzhba_type'),
                 'birth_date': request.form.get('birth_date'),
+                'treatment_history': ["\t" + "За час проходження військової служби не знаходився на стаціонарному або амбулаторному лікуванні у закладах Міністерства охорони здоров'я України та медичних територіальних об'єднань Міністерства внутрішніх справ України."],
             }
-            # Якщо завантажили PDF для невідомої особи — виводимо епізоди з PDF
-            if pdf_episodes:
-                # Побудуємо прості рядки історії за епізодами
-                lines = []
-                for ep in pdf_episodes:
-                    ds = ep.get('date_start') or '[дата не вказана]'
-                    de = ep.get('date_end') or 'по теперішній час'
-                    dx = ep.get('diagnosis') or ''
-                    base = f"З {ds} по {de} отримував(ла) медичну допомогу"
-                    if hide_diagnosis_flag:
-                        lines.append(base + ".")
-                    else:
-                        if dx and not dx.endswith('.'):
-                            dx = dx + '.'
-                        lines.append(base + f" Діагноз: {dx}")
-                context['treatment_history'] = ["\t" + l for l in lines] if lines else ["\t" + "За час проходження військової служби не знаходився на стаціонарному або амбулаторному лікуванні у закладах Міністерства охорони здоров'я України та медичних територіальних об'єднань Міністерства внутрішніх справ України."]
-            else:
-                context['treatment_history'] = ["\t" + "За час проходження військової служби не знаходився на стаціонарному або амбулаторному лікуванні у закладах Міністерства охорони здоров'я України та медичних територіальних об'єднань Міністерства внутрішніх справ України."]
         
         pib_nazivnyi_display = format_nominative_pib_display(pib_nazivnyi)
         context['pib_nazivnyi'] = pib_nazivnyi_display
