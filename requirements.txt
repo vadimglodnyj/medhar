@@ -1,0 +1,12 @@
+# Мінімальні залежності для python app.py (медична характеристика). Python 3.8+.
+setuptools>=65.0.0
+wheel>=0.40.0
+numpy>=1.24.0
+Flask>=2.3.0
+Werkzeug>=2.3.0
+pandas>=2.0.0
+python-docx>=0.8.11
+docxtpl>=0.16.7
+openpyxl>=3.1.0
+pymorphy3>=2.0.0
+pymorphy3-dicts-uk>=2.4.0
