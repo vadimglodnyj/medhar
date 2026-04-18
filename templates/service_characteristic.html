@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block title %}Службова характеристика - МедХар{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+      <div class="page-header text-center">
+        <h1><i class="fas fa-file-signature me-3"></i>Службова характеристика</h1>
+        <p class="lead">Генерація службової характеристики військовослужбовця</p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="fas fa-edit me-2"></i>Заповніть дані для генерації</h5>
+        </div>
+        <div class="card-body">
+          <form id="generation-form" method="POST">
+            <div class="mb-3">
+              <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>ПІБ (в називному відмінку)</label>
+              <div class="autocomplete-container">
+                <input type="text" id="pib_nazivnyi" name="pib_nazivnyi" class="form-control" placeholder="Почніть вводити ПІБ для пошуку..." required />
+                <div id="pib-suggestions" class="autocomplete-suggestions"></div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label for="zvanie" class="form-label">Військове звання</label>
+                <input type="text" id="zvanie" name="zvanie" class="form-control" placeholder="Автопідстановка з Excel або введіть вручну" />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="zaimana_posada" class="form-label">Займана посада</label>
+                <input type="text" id="zaimana_posada" name="zaimana_posada" class="form-control" placeholder="Автопідстановка з Excel; якщо порожньо — буде фраза за замовчуванням" />
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label for="prizvyshche" class="form-label">Прізвище</label>
+                <input type="text" id="prizvyshche" name="prizvyshche" class="form-control" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label for="imya" class="form-label">Ім'я</label>
+                <input type="text" id="imya" name="imya" class="form-control" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label for="po_batkovi" class="form-label">По батькові</label>
+                <input type="text" id="po_batkovi" name="po_batkovi" class="form-control" />
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label for="komisariat_ta_data_prizovu" class="form-label">Яким військовим комісаріатом і коли прийнятий (призваний)</label>
+              <input type="text" id="komisariat_ta_data_prizovu" name="komisariat_ta_data_prizovu" class="form-control" placeholder="Напр.: Гуляйпільським РТЦК та СП Запорізької обл., 25.12.2025" required />
+              <div class="form-text">Дата обов'язкова у форматі дд.мм.рррр; при генерації рядок нормалізується до формату «..., дд.мм.рррр року.»</div>
+            </div>
+
+            <div class="mb-3">
+              <label for="osvita" class="form-label">Освіта</label>
+              <input type="text" id="osvita" name="osvita" class="form-control" placeholder="Напр.: середня, ЗОШ №276 м. Баку, у 1996 році" required />
+              <div class="form-text">Система автоматично додасть фінальну крапку, якщо її немає.</div>
+            </div>
+
+            <hr />
+            <h6><i class="fas fa-signature me-2"></i>Підписанти</h6>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label for="pidpysant_1_zvannya" class="form-label">Підписант 1: звання</label>
+                <input type="text" id="pidpysant_1_zvannya" name="pidpysant_1_zvannya" class="form-control" value="{{ signatory_defaults.pidpysant_1_zvannya if signatory_defaults else '' }}" required />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="pidpysant_1_pib" class="form-label">Підписант 1: ПІБ</label>
+                <input type="text" id="pidpysant_1_pib" name="pidpysant_1_pib" class="form-control" value="{{ signatory_defaults.pidpysant_1_pib if signatory_defaults else '' }}" required />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="pidpysant_2_zvannya" class="form-label">Підписант 2: звання</label>
+                <input type="text" id="pidpysant_2_zvannya" name="pidpysant_2_zvannya" class="form-control" value="{{ signatory_defaults.pidpysant_2_zvannya if signatory_defaults else '' }}" required />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="pidpysant_2_pib" class="form-label">Підписант 2: ПІБ</label>
+                <input type="text" id="pidpysant_2_pib" name="pidpysant_2_pib" class="form-control" value="{{ signatory_defaults.pidpysant_2_pib if signatory_defaults else '' }}" required />
+              </div>
+            </div>
+            <div class="mb-3 d-flex gap-2">
+              <button type="button" id="save-signatories-btn" class="btn btn-outline-secondary">
+                <i class="fas fa-save me-1"></i>Зберегти підписантів
+              </button>
+              <span id="save-signatories-msg" class="small text-muted align-self-center"></span>
+            </div>
+
+            <div class="d-grid">
+              <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
+                <i class="fas fa-file-signature me-2"></i>Створити службову характеристику
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  .autocomplete-container { position: relative; }
+  .autocomplete-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ced4da;
+    border-top: none;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+    border-radius: 0 0 0.375rem 0.375rem;
+  }
+  .autocomplete-suggestion {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid #dee2e6;
+  }
+  .autocomplete-suggestion:hover,
+  .autocomplete-suggestion.selected { background-color: #f8f9fa; }
+  .autocomplete-suggestion:last-child { border-bottom: none; }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const form = document.getElementById("generation-form");
+  const submitButton = document.getElementById("submit-button");
+  const saveSignatoriesBtn = document.getElementById("save-signatories-btn");
+  const saveSignatoriesMsg = document.getElementById("save-signatories-msg");
+  const pibNazivnyi = document.getElementById("pib_nazivnyi");
+  const pibSuggestions = document.getElementById("pib-suggestions");
+  let currentSuggestions = [];
+  let selectedIndex = -1;
+  let searchTimeout;
+
+  async function searchPIB(query) {
+    if (query.length < 2) {
+      hideSuggestions();
+      return;
+    }
+    try {
+      const response = await fetch(`/api/search_pib?q=${encodeURIComponent(query)}&context=service`);
+      if (!response.ok) throw new Error(String(response.status));
+      const data = await response.json();
+      if (data.results && data.results.length > 0) showSuggestions(data.results);
+      else hideSuggestions();
+    } catch (error) {
+      console.error("Помилка при пошуку ПІБ:", error);
+      hideSuggestions();
+    }
+  }
+
+  function showSuggestions(suggestions) {
+    currentSuggestions = suggestions;
+    selectedIndex = -1;
+    pibSuggestions.innerHTML = "";
+    suggestions.forEach((suggestion) => {
+      const div = document.createElement("div");
+      div.className = "autocomplete-suggestion";
+      div.textContent = suggestion.label;
+      div.addEventListener("click", function () {
+        selectSuggestion(suggestion);
+      });
+      pibSuggestions.appendChild(div);
+    });
+    pibSuggestions.style.display = "block";
+  }
+
+  function hideSuggestions() {
+    pibSuggestions.style.display = "none";
+    currentSuggestions = [];
+    selectedIndex = -1;
+  }
+
+  function selectSuggestion(suggestion) {
+    pibNazivnyi.value = suggestion.value || "";
+    if (suggestion.rank && !document.getElementById("zvanie").value) {
+      document.getElementById("zvanie").value = suggestion.rank;
+    }
+    if (suggestion.position && !document.getElementById("zaimana_posada").value) {
+      document.getElementById("zaimana_posada").value = suggestion.position;
+    }
+    if (suggestion.prizvyshche && !document.getElementById("prizvyshche").value) {
+      document.getElementById("prizvyshche").value = suggestion.prizvyshche;
+    }
+    if (suggestion.imya && !document.getElementById("imya").value) {
+      document.getElementById("imya").value = suggestion.imya;
+    }
+    if (suggestion.po_batkovi && !document.getElementById("po_batkovi").value) {
+      document.getElementById("po_batkovi").value = suggestion.po_batkovi;
+    }
+    hideSuggestions();
+  }
+
+  function handleKeyNavigation(e) {
+    if (pibSuggestions.style.display === "none") return;
+    const suggestions = pibSuggestions.querySelectorAll(".autocomplete-suggestion");
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
+        updateSelection(suggestions);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, -1);
+        updateSelection(suggestions);
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+          selectSuggestion(currentSuggestions[selectedIndex]);
+        }
+        break;
+      case "Escape":
+        hideSuggestions();
+        break;
+    }
+  }
+
+  function updateSelection(suggestions) {
+    suggestions.forEach((suggestion, index) => {
+      suggestion.classList.toggle("selected", index === selectedIndex);
+    });
+  }
+
+  pibNazivnyi.addEventListener("input", function () {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => searchPIB(pibNazivnyi.value), 300);
+  });
+  pibNazivnyi.addEventListener("keydown", handleKeyNavigation);
+  document.addEventListener("click", function (e) {
+    if (!pibNazivnyi.contains(e.target) && !pibSuggestions.contains(e.target)) hideSuggestions();
+  });
+
+  function validateDate(dateString) {
+    const pattern = /^(\d{2})\.(\d{2})\.(\d{4})$/;
+    const match = dateString.match(pattern);
+    if (!match) return false;
+    const day = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const year = parseInt(match[3], 10);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+    const date = new Date(year, month - 1, day);
+    return date.getDate() === day && date.getMonth() === month - 1 && date.getFullYear() === year;
+  }
+
+  document.getElementById("komisariat_ta_data_prizovu").addEventListener("blur", function () {
+    const m = this.value.match(/(\d{2}\.\d{2}\.\d{4})/);
+    if (!m || !validateDate(m[1])) {
+      this.setCustomValidity("Вкажіть дату у форматі дд.мм.рррр");
+    } else {
+      this.setCustomValidity("");
+    }
+  });
+
+  function signatoriesPayload() {
+    return {
+      pidpysant_1_zvannya: document.getElementById("pidpysant_1_zvannya").value.trim(),
+      pidpysant_1_pib: document.getElementById("pidpysant_1_pib").value.trim(),
+      pidpysant_2_zvannya: document.getElementById("pidpysant_2_zvannya").value.trim(),
+      pidpysant_2_pib: document.getElementById("pidpysant_2_pib").value.trim(),
+    };
+  }
+
+  async function saveSignatories() {
+    const payload = signatoriesPayload();
+    if (!payload.pidpysant_1_zvannya || !payload.pidpysant_1_pib || !payload.pidpysant_2_zvannya || !payload.pidpysant_2_pib) {
+      saveSignatoriesMsg.textContent = "Заповніть усі поля підписантів";
+      saveSignatoriesMsg.className = "small text-danger align-self-center";
+      return false;
+    }
+    try {
+      saveSignatoriesBtn.disabled = true;
+      const r = await fetch("/api/service_signatories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) {
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      saveSignatoriesMsg.textContent = "Підписанти збережені";
+      saveSignatoriesMsg.className = "small text-success align-self-center";
+      return true;
+    } catch (e) {
+      console.error(e);
+      saveSignatoriesMsg.textContent = "Не вдалося зберегти: " + e.message;
+      saveSignatoriesMsg.className = "small text-danger align-self-center";
+      return false;
+    } finally {
+      saveSignatoriesBtn.disabled = false;
+    }
+  }
+
+  saveSignatoriesBtn.addEventListener("click", saveSignatories);
+
+  async function loadSavedSignatoriesIfEmpty() {
+    try {
+      const r = await fetch("/api/service_signatories");
+      if (!r.ok) return;
+      const j = await r.json();
+      const fields = ["pidpysant_1_zvannya", "pidpysant_1_pib", "pidpysant_2_zvannya", "pidpysant_2_pib"];
+      fields.forEach((id) => {
+        const input = document.getElementById(id);
+        if (input && !input.value.trim() && j[id]) input.value = j[id];
+      });
+    } catch (_) {}
+  }
+
+  document.addEventListener("DOMContentLoaded", loadSavedSignatoriesIfEmpty);
+
+  form.addEventListener("submit", function () {
+    if (form.checkValidity()) {
+      showLoading();
+      submitButton.disabled = true;
+      const timer = setInterval(function () {
+        if (document.cookie.includes("fileDownload=true")) {
+          clearInterval(timer);
+          hideLoading();
+          submitButton.disabled = false;
+          document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+        }
+      }, 500);
+    }
+  });
+</script>
+{% endblock %}

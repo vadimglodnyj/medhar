@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}Рапорт на ВЛК - МедХар{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-10">
+      <div class="page-header text-center">
+        <h1><i class="fas fa-file-lines me-3"></i>Рапорт на ВЛК</h1>
+        <p class="lead">Генерація за плейсхолдерами у шаблоні DOCX</p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="fas fa-pen me-2"></i>Заповніть дані рапорту</h5>
+        </div>
+        <div class="card-body">
+          <form id="generation-form" method="POST">
+            <h6 class="mb-3">Реквізити медичного висновку</h6>
+            <div class="mb-3">
+              <label for="oglyad_nuber" class="form-label">Номер консультативного висновку спеціаліста</label>
+              <input type="text" id="oglyad_nuber" name="oglyad_nuber" class="form-control" value="{{ defaults.oglyad_nuber }}" required />
+            </div>
+            <div class="mb-3">
+              <label for="likar" class="form-label">Спеціалізація лікаря</label>
+              <input type="text" id="likar" name="likar" class="form-control" value="{{ defaults.likar }}" required />
+            </div>
+            <div class="mb-3">
+              <label for="hospital" class="form-label">Назва ЛПЗ</label>
+              <input type="text" id="hospital" name="hospital" class="form-control" value="{{ defaults.hospital }}" required />
+            </div>
+
+            <hr />
+            <h6 class="mb-3">Військовослужбовець</h6>
+            <div class="mb-3">
+              <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>ПІБ (автокомпліт)</label>
+              <div class="autocomplete-container">
+                <input type="text" id="pib_nazivnyi" name="pib_nazivnyi" class="form-control" value="{{ defaults.pib_nazivnyi }}" placeholder="Почніть вводити ПІБ..." required />
+                <div id="pib-suggestions" class="autocomplete-suggestions"></div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Поле 4: посада (авто з base)</label>
+                <input type="text" id="auto_posada" class="form-control" readonly />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label">Поле 5: звання (авто з base)</label>
+                <input type="text" id="auto_zvanie" class="form-control" readonly />
+              </div>
+            </div>
+
+            <hr />
+            <h6 class="mb-3">ТВО командира частини</h6>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label for="tvo_kombrig_zvannya" class="form-label">ТВО командира частини: звання (називний)</label>
+              <input type="text" id="tvo_kombrig_zvannya" name="tvo_kombrig_zvannya" class="form-control" value="{{ defaults.tvo_kombrig_zvannya }}" required />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="tvo_kombrig_pib" class="form-label">ТВО командира частини: ПІБ (називний)</label>
+              <input type="text" id="tvo_kombrig_pib" name="tvo_kombrig_pib" class="form-control" value="{{ defaults.tvo_kombrig_pib }}" required />
+              </div>
+            </div>
+
+            <hr />
+            <h6 class="mb-3">ТВО командира батальйону</h6>
+            <div class="mb-3">
+              <label for="tvo_kombat_zvannya" class="form-label">ТВО командира батальйону: звання</label>
+              <input type="text" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" class="form-control" value="{{ defaults.tvo_kombat_zvannya }}" required />
+            </div>
+            <div class="mb-3">
+              <label for="tvo_kombat_pib" class="form-label">ТВО командира батальйону: ПІБ</label>
+              <input type="text" id="tvo_kombat_pib" name="tvo_kombat_pib" class="form-control" value="{{ defaults.tvo_kombat_pib }}" required />
+            </div>
+
+            <div class="mb-3 d-flex gap-2">
+              <button type="button" id="save-signatories-btn" class="btn btn-outline-secondary">
+                <i class="fas fa-save me-1"></i>Зберегти підписантів ВЛК
+              </button>
+              <span id="save-signatories-msg" class="small text-muted align-self-center"></span>
+            </div>
+
+            <div class="d-grid">
+              <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
+                <i class="fas fa-file-word me-2"></i>Створити рапорт на ВЛК
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+  .autocomplete-container { position: relative; }
+  .autocomplete-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ced4da;
+    border-top: none;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: none;
+    border-radius: 0 0 0.375rem 0.375rem;
+  }
+  .autocomplete-suggestion {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    border-bottom: 1px solid #dee2e6;
+  }
+  .autocomplete-suggestion:hover,
+  .autocomplete-suggestion.selected { background-color: #f8f9fa; }
+  .autocomplete-suggestion:last-child { border-bottom: none; }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const form = document.getElementById("generation-form");
+  const submitButton = document.getElementById("submit-button");
+  const pibInput = document.getElementById("pib_nazivnyi");
+  const pibSuggestions = document.getElementById("pib-suggestions");
+  const autoPosada = document.getElementById("auto_posada");
+  const autoZvanie = document.getElementById("auto_zvanie");
+  const saveSignatoriesBtn = document.getElementById("save-signatories-btn");
+  const saveSignatoriesMsg = document.getElementById("save-signatories-msg");
+  let currentSuggestions = [];
+  let selectedIndex = -1;
+  let searchTimeout;
+
+  async function searchPIB(query) {
+    if (!pibInput || query.length < 2) {
+      hideSuggestions();
+      return;
+    }
+    try {
+      const response = await fetch(`/api/search_pib?q=${encodeURIComponent(query)}&context=service`);
+      if (!response.ok) throw new Error(String(response.status));
+      const data = await response.json();
+      if (data.results && data.results.length > 0) showSuggestions(data.results);
+      else hideSuggestions();
+    } catch (_) {
+      hideSuggestions();
+    }
+  }
+
+  function showSuggestions(suggestions) {
+    currentSuggestions = suggestions;
+    selectedIndex = -1;
+    pibSuggestions.innerHTML = "";
+    suggestions.forEach((suggestion) => {
+      const div = document.createElement("div");
+      div.className = "autocomplete-suggestion";
+      div.textContent = suggestion.label;
+      div.addEventListener("click", function () {
+        selectSuggestion(suggestion);
+      });
+      pibSuggestions.appendChild(div);
+    });
+    pibSuggestions.style.display = "block";
+  }
+
+  function hideSuggestions() {
+    if (!pibSuggestions) return;
+    pibSuggestions.style.display = "none";
+    currentSuggestions = [];
+    selectedIndex = -1;
+  }
+
+  function selectSuggestion(suggestion) {
+    pibInput.value = suggestion.value || "";
+    if (autoZvanie) autoZvanie.value = suggestion.rank || "";
+    if (autoPosada) autoPosada.value = suggestion.position || "";
+    hideSuggestions();
+  }
+
+  function handleKeyNavigation(e) {
+    if (!pibSuggestions || pibSuggestions.style.display === "none") return;
+    const suggestions = pibSuggestions.querySelectorAll(".autocomplete-suggestion");
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
+        updateSelection(suggestions);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, -1);
+        updateSelection(suggestions);
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+          selectSuggestion(currentSuggestions[selectedIndex]);
+        }
+        break;
+      case "Escape":
+        hideSuggestions();
+        break;
+    }
+  }
+
+  function updateSelection(suggestions) {
+    suggestions.forEach((suggestion, index) => {
+      suggestion.classList.toggle("selected", index === selectedIndex);
+    });
+  }
+
+  function signatoriesPayload() {
+    return {
+      tvo_kombrig_zvannya: document.getElementById("tvo_kombrig_zvannya").value.trim(),
+      tvo_kombrig_pib: document.getElementById("tvo_kombrig_pib").value.trim(),
+      tvo_kombat_zvannya: document.getElementById("tvo_kombat_zvannya").value.trim(),
+      tvo_kombat_pib: document.getElementById("tvo_kombat_pib").value.trim(),
+    };
+  }
+
+  async function saveSignatories() {
+    const payload = signatoriesPayload();
+    if (!payload.tvo_kombrig_zvannya || !payload.tvo_kombrig_pib || !payload.tvo_kombat_zvannya || !payload.tvo_kombat_pib) {
+      saveSignatoriesMsg.textContent = "Заповніть усі поля підписантів";
+      saveSignatoriesMsg.className = "small text-danger align-self-center";
+      return false;
+    }
+    try {
+      saveSignatoriesBtn.disabled = true;
+      const r = await fetch("/api/vlk_signatories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      saveSignatoriesMsg.textContent = "Підписанти ВЛК збережені";
+      saveSignatoriesMsg.className = "small text-success align-self-center";
+      return true;
+    } catch (e) {
+      saveSignatoriesMsg.textContent = "Не вдалося зберегти: " + e.message;
+      saveSignatoriesMsg.className = "small text-danger align-self-center";
+      return false;
+    } finally {
+      saveSignatoriesBtn.disabled = false;
+    }
+  }
+
+  async function loadSavedSignatoriesIfEmpty() {
+    try {
+      const r = await fetch("/api/vlk_signatories");
+      if (!r.ok) return;
+      const j = await r.json();
+      const fields = ["tvo_kombrig_zvannya", "tvo_kombrig_pib", "tvo_kombat_zvannya", "tvo_kombat_pib"];
+      fields.forEach((id) => {
+        const input = document.getElementById(id);
+        if (input && !input.value.trim() && j[id]) input.value = j[id];
+      });
+    } catch (_) {}
+  }
+
+  if (saveSignatoriesBtn) saveSignatoriesBtn.addEventListener("click", saveSignatories);
+  document.addEventListener("DOMContentLoaded", loadSavedSignatoriesIfEmpty);
+
+
+  if (pibInput) {
+    pibInput.addEventListener("input", function () {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => searchPIB(pibInput.value), 300);
+    });
+    pibInput.addEventListener("keydown", handleKeyNavigation);
+  }
+  document.addEventListener("click", function (e) {
+    if (!pibInput || !pibSuggestions) return;
+    if (!pibInput.contains(e.target) && !pibSuggestions.contains(e.target)) hideSuggestions();
+  });
+
+  if (form && submitButton) {
+    form.addEventListener("submit", function () {
+      if (form.checkValidity()) {
+        showLoading();
+        submitButton.disabled = true;
+        const timer = setInterval(function () {
+          if (document.cookie.includes("fileDownload=true")) {
+            clearInterval(timer);
+            hideLoading();
+            submitButton.disabled = false;
+            document.cookie = "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+          }
+        }, 500);
+      }
+    });
+  }
+</script>
+{% endblock %}
