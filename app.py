@@ -1456,7 +1456,7 @@ def medical_characteristic():
             first_record = soldier_records.iloc[0]
             kategoriia = first_record['Категорія']
             birth_date_obj = first_record['Дата народження']
-            zvanie = ensure_medical_service_rank(first_record['Військове звання'])
+            zvanie, _ = split_medical_service_rank(first_record['Військове звання'])
             try:
                 birth_date_str = birth_date_obj.strftime('%d.%m.%Y') if pd.notna(birth_date_obj) else "[дата не вказана]"
             except Exception:
@@ -1469,7 +1469,7 @@ def medical_characteristic():
             }
         else:
             context = {
-                'zvanie': ensure_medical_service_rank(request.form.get('zvanie')),
+                'zvanie': split_medical_service_rank(request.form.get('zvanie'))[0],
                 'sluzhba_type': request.form.get('sluzhba_type'),
                 'birth_date': request.form.get('birth_date'),
                 'treatment_history': ["\t" + "За час проходження військової служби не знаходився на стаціонарному або амбулаторному лікуванні у закладах Міністерства охорони здоров'я України та медичних територіальних об'єднань Міністерства внутрішніх справ України."],

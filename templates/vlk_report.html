@@ -75,13 +75,15 @@
 
             <hr />
             <h6 class="mb-3">ТВО командира батальйону</h6>
-            <div class="mb-3">
-              <label for="tvo_kombat_zvannya" class="form-label">ТВО командира батальйону: звання</label>
-              <input type="text" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" class="form-control" value="{{ defaults.tvo_kombat_zvannya }}" required />
-            </div>
-            <div class="mb-3">
-              <label for="tvo_kombat_pib" class="form-label">ТВО командира батальйону: ПІБ</label>
-              <input type="text" id="tvo_kombat_pib" name="tvo_kombat_pib" class="form-control" value="{{ defaults.tvo_kombat_pib }}" required />
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label for="tvo_kombat_zvannya" class="form-label">ТВО командира батальйону: звання</label>
+                <input type="text" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" class="form-control" value="{{ defaults.tvo_kombat_zvannya }}" required />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="tvo_kombat_pib" class="form-label">ТВО командира батальйону: ПІБ</label>
+                <input type="text" id="tvo_kombat_pib" name="tvo_kombat_pib" class="form-control" value="{{ defaults.tvo_kombat_pib }}" required />
+              </div>
             </div>
 
             <div class="mb-3 d-flex gap-2">

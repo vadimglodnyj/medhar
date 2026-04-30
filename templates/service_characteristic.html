@@ -36,29 +36,20 @@
 
             <div class="row">
               <div class="col-md-6 mb-3">
-                <label for="zvanie" class="form-label">Військове звання</label>
-                <input type="text" id="zvanie" name="zvanie" class="form-control" placeholder="Автопідстановка з Excel або введіть вручну" />
+                <label class="form-label">Військове звання (авто з base)</label>
+                <input type="text" id="auto_zvanie" class="form-control" readonly />
               </div>
               <div class="col-md-6 mb-3">
-                <label for="zaimana_posada" class="form-label">Займана посада</label>
-                <input type="text" id="zaimana_posada" name="zaimana_posada" class="form-control" placeholder="Автопідстановка з Excel; якщо порожньо — буде фраза за замовчуванням" />
+                <label class="form-label">Займана посада (авто з base)</label>
+                <input type="text" id="auto_posada" class="form-control" readonly />
               </div>
             </div>
 
-            <div class="row">
-              <div class="col-md-4 mb-3">
-                <label for="prizvyshche" class="form-label">Прізвище</label>
-                <input type="text" id="prizvyshche" name="prizvyshche" class="form-control" />
-              </div>
-              <div class="col-md-4 mb-3">
-                <label for="imya" class="form-label">Ім'я</label>
-                <input type="text" id="imya" name="imya" class="form-control" />
-              </div>
-              <div class="col-md-4 mb-3">
-                <label for="po_batkovi" class="form-label">По батькові</label>
-                <input type="text" id="po_batkovi" name="po_batkovi" class="form-control" />
-              </div>
-            </div>
+            <input type="hidden" id="zvanie" name="zvanie" />
+            <input type="hidden" id="zaimana_posada" name="zaimana_posada" />
+            <input type="hidden" id="prizvyshche" name="prizvyshche" />
+            <input type="hidden" id="imya" name="imya" />
+            <input type="hidden" id="po_batkovi" name="po_batkovi" />
 
             <div class="mb-3">
               <label for="komisariat_ta_data_prizovu" class="form-label">Яким військовим комісаріатом і коли прийнятий (призваний)</label>
@@ -73,28 +64,33 @@
             </div>
 
             <hr />
-            <h6><i class="fas fa-signature me-2"></i>Підписанти</h6>
+            <h6 class="mb-3">Підписанти</h6>
             <div class="row">
               <div class="col-md-6 mb-3">
-                <label for="pidpysant_1_zvannya" class="form-label">Підписант 1: звання</label>
+                <label for="pidpysant_1_zvannya" class="form-label">ТВО командира частини: звання (називний)</label>
                 <input type="text" id="pidpysant_1_zvannya" name="pidpysant_1_zvannya" class="form-control" value="{{ signatory_defaults.pidpysant_1_zvannya if signatory_defaults else '' }}" required />
               </div>
               <div class="col-md-6 mb-3">
-                <label for="pidpysant_1_pib" class="form-label">Підписант 1: ПІБ</label>
+                <label for="pidpysant_1_pib" class="form-label">ТВО командира частини: ПІБ (називний)</label>
                 <input type="text" id="pidpysant_1_pib" name="pidpysant_1_pib" class="form-control" value="{{ signatory_defaults.pidpysant_1_pib if signatory_defaults else '' }}" required />
               </div>
+            </div>
+
+            <hr />
+            <h6 class="mb-3">ТВО командира батальйону</h6>
+            <div class="row">
               <div class="col-md-6 mb-3">
-                <label for="pidpysant_2_zvannya" class="form-label">Підписант 2: звання</label>
+                <label for="pidpysant_2_zvannya" class="form-label">ТВО командира батальйону: звання</label>
                 <input type="text" id="pidpysant_2_zvannya" name="pidpysant_2_zvannya" class="form-control" value="{{ signatory_defaults.pidpysant_2_zvannya if signatory_defaults else '' }}" required />
               </div>
               <div class="col-md-6 mb-3">
-                <label for="pidpysant_2_pib" class="form-label">Підписант 2: ПІБ</label>
+                <label for="pidpysant_2_pib" class="form-label">ТВО командира батальйону: ПІБ</label>
                 <input type="text" id="pidpysant_2_pib" name="pidpysant_2_pib" class="form-control" value="{{ signatory_defaults.pidpysant_2_pib if signatory_defaults else '' }}" required />
               </div>
             </div>
             <div class="mb-3 d-flex gap-2">
               <button type="button" id="save-signatories-btn" class="btn btn-outline-secondary">
-                <i class="fas fa-save me-1"></i>Зберегти підписантів
+                <i class="fas fa-save me-1"></i>Зберегти підписантів службової
               </button>
               <span id="save-signatories-msg" class="small text-muted align-self-center"></span>
             </div>
@@ -148,6 +144,8 @@
   const saveSignatoriesMsg = document.getElementById("save-signatories-msg");
   const pibNazivnyi = document.getElementById("pib_nazivnyi");
   const pibSuggestions = document.getElementById("pib-suggestions");
+  const autoZvanie = document.getElementById("auto_zvanie");
+  const autoPosada = document.getElementById("auto_posada");
   let currentSuggestions = [];
   let selectedIndex = -1;
   let searchTimeout;
@@ -193,21 +191,13 @@
 
   function selectSuggestion(suggestion) {
     pibNazivnyi.value = suggestion.value || "";
-    if (suggestion.rank && !document.getElementById("zvanie").value) {
-      document.getElementById("zvanie").value = suggestion.rank;
-    }
-    if (suggestion.position && !document.getElementById("zaimana_posada").value) {
-      document.getElementById("zaimana_posada").value = suggestion.position;
-    }
-    if (suggestion.prizvyshche && !document.getElementById("prizvyshche").value) {
-      document.getElementById("prizvyshche").value = suggestion.prizvyshche;
-    }
-    if (suggestion.imya && !document.getElementById("imya").value) {
-      document.getElementById("imya").value = suggestion.imya;
-    }
-    if (suggestion.po_batkovi && !document.getElementById("po_batkovi").value) {
-      document.getElementById("po_batkovi").value = suggestion.po_batkovi;
-    }
+    document.getElementById("zvanie").value = suggestion.rank || "";
+    document.getElementById("zaimana_posada").value = suggestion.position || "";
+    document.getElementById("prizvyshche").value = suggestion.prizvyshche || "";
+    document.getElementById("imya").value = suggestion.imya || "";
+    document.getElementById("po_batkovi").value = suggestion.po_batkovi || "";
+    if (autoZvanie) autoZvanie.value = suggestion.rank || "";
+    if (autoPosada) autoPosada.value = suggestion.position || "";
     hideSuggestions();
   }
 
@@ -244,6 +234,13 @@
   }
 
   pibNazivnyi.addEventListener("input", function () {
+    document.getElementById("zvanie").value = "";
+    document.getElementById("zaimana_posada").value = "";
+    document.getElementById("prizvyshche").value = "";
+    document.getElementById("imya").value = "";
+    document.getElementById("po_batkovi").value = "";
+    if (autoZvanie) autoZvanie.value = "";
+    if (autoPosada) autoPosada.value = "";
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => searchPIB(pibNazivnyi.value), 300);
   });
