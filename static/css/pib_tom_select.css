@@ -1,0 +1,71 @@
+/* Tom Select — узгоджено з medhar.css */
+
+.ts-wrapper,
+.ts-control,
+.ts-dropdown,
+.ts-dropdown .option {
+  transition: none !important;
+  animation: none !important;
+}
+
+.ts-wrapper.single .ts-control,
+.ts-wrapper.multi .ts-control {
+  padding: 0.375rem 0.75rem;
+  min-height: calc(1.5em + 0.75rem + 2px);
+  border-radius: var(--mh-radius-sm, 0.55rem);
+  border: 1.5px solid var(--mh-border, #c5dde0);
+  background-color: var(--mh-surface-solid, #fff);
+  box-shadow: none;
+  font-family: inherit;
+}
+
+#generation-form .form-control,
+#generation-form .form-select {
+  min-height: calc(1.5em + 0.75rem + 2px);
+  border-radius: var(--mh-radius-sm, 0.55rem);
+  border: 1.5px solid var(--mh-border, #c5dde0);
+  box-shadow: none;
+}
+
+#generation-form .form-control:focus,
+#generation-form .form-select:focus {
+  border-color: var(--mh-primary, #0d8a8a);
+  box-shadow: var(--mh-focus, 0 0 0 0.22rem rgba(13, 138, 138, 0.22));
+}
+
+.ts-wrapper.focus .ts-control,
+.ts-wrapper.single.focus .ts-control {
+  border-color: var(--mh-primary, #0d8a8a);
+  box-shadow: var(--mh-focus, 0 0 0 0.22rem rgba(13, 138, 138, 0.22));
+}
+
+.ts-wrapper {
+  margin-bottom: 0;
+}
+
+.ts-wrapper.disabled .ts-control,
+.ts-wrapper.plugin-locked .ts-control {
+  background-color: #eef4f4;
+  opacity: 1;
+  color: var(--mh-text-muted, #5a7478);
+}
+
+.ts-dropdown {
+  z-index: 1050;
+  border-radius: var(--mh-radius-sm, 0.55rem);
+  border: 1.5px solid var(--mh-border, #c5dde0);
+  box-shadow: var(--mh-shadow, 0 8px 28px rgba(30, 90, 95, 0.08));
+}
+
+.ts-dropdown .active {
+  background-color: var(--mh-primary-soft, #e6f6f6);
+  color: var(--mh-text, #1e3a3c);
+}
+
+.ts-wrapper.mt-2 {
+  margin-top: 0.5rem !important;
+}
+
+.ts-dropdown.d-none {
+  display: none !important;
+}

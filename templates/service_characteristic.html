@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Службова характеристика - МедХар{% endblock %}
+{% block title %}Службова характеристика - Медичний пункт батальйону{% endblock %}
 {% block content %}
 <div class="container">
   <div class="row justify-content-center">
     <div class="col-lg-8">
       <div class="page-header text-center">
-        <h1><i class="fas fa-file-signature me-3"></i>Службова характеристика</h1>
+        <h1><i class="fas fa-file-signature me-2"></i>Службова характеристика</h1>
         <p class="lead">Генерація службової характеристики військовослужбовця</p>
       </div>
 
@@ -22,27 +22,14 @@
 
       <div class="card">
         <div class="card-header">
-          <h5 class="mb-0"><i class="fas fa-edit me-2"></i>Заповніть дані для генерації</h5>
+          <h5 class="mh-section-title mb-0"><i class="fas fa-edit"></i>Заповніть дані для генерації</h5>
         </div>
         <div class="card-body">
           <form id="generation-form" method="POST">
             <div class="mb-3">
-              <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>ПІБ (в називному відмінку)</label>
-              <div class="autocomplete-container">
-                <input type="text" id="pib_nazivnyi" name="pib_nazivnyi" class="form-control" placeholder="Почніть вводити ПІБ для пошуку..." required />
-                <div id="pib-suggestions" class="autocomplete-suggestions"></div>
-              </div>
-            </div>
-
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Військове звання (авто з base)</label>
-                <input type="text" id="auto_zvanie" class="form-control" readonly />
-              </div>
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Займана посада (авто з base)</label>
-                <input type="text" id="auto_posada" class="form-control" readonly />
-              </div>
+              <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>Прізвище Ім'я по-батькові</label>
+              <select id="pib_nazivnyi" name="pib_nazivnyi" required placeholder="Почніть вводити ПІБ для пошуку..."></select>
+              <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
             </div>
 
             <input type="hidden" id="zvanie" name="zvanie" />
@@ -51,48 +38,150 @@
             <input type="hidden" id="imya" name="imya" />
             <input type="hidden" id="po_batkovi" name="po_batkovi" />
 
-            <div class="mb-3">
-              <label for="komisariat_ta_data_prizovu" class="form-label">Яким військовим комісаріатом і коли прийнятий (призваний)</label>
-              <input type="text" id="komisariat_ta_data_prizovu" name="komisariat_ta_data_prizovu" class="form-control" placeholder="Напр.: Гуляйпільським РТЦК та СП Запорізької обл., 25.12.2025" required />
-              <div class="form-text">Дата обов'язкова у форматі дд.мм.рррр; при генерації рядок нормалізується до формату «..., дд.мм.рррр року.»</div>
+            <h6 class="mb-3">Яким військовим комісаріатом і коли призваний</h6>
+            <div class="row">
+              <div class="col-md-8 mb-3">
+                <label for="komisariat" class="form-label">Військовий комісаріат</label>
+                <input
+                  type="text"
+                  id="komisariat"
+                  name="komisariat"
+                  class="form-control"
+                  placeholder="Напр.: Гуляйпільським РТЦК та СП Запорізької обл."
+                  required
+                />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label for="data_pryzovu" class="form-label">Дата призову</label>
+                <input
+                  type="text"
+                  id="data_pryzovu"
+                  name="data_pryzovu"
+                  class="form-control"
+                  placeholder="дд.мм.рррр"
+                  pattern="\d{2}\.\d{2}\.\d{4}"
+                  title="Введіть дату у форматі дд.мм.рррр"
+                  required
+                />
+              </div>
             </div>
 
-            <div class="mb-3">
-              <label for="osvita" class="form-label">Освіта</label>
-              <input type="text" id="osvita" name="osvita" class="form-control" placeholder="Напр.: середня, ЗОШ №276 м. Баку, у 1996 році" required />
-              <div class="form-text">Система автоматично додасть фінальну крапку, якщо її немає.</div>
+            <h6 class="mb-3">Освіта</h6>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label for="osvita_type" class="form-label">Вид освіти</label>
+                <select id="osvita_type" name="osvita_type" class="form-select" required>
+                  <option value="">Оберіть вид освіти</option>
+                  <option value="середня">середня</option>
+                  <option value="середньо-спеціальна">середньо-спеціальна</option>
+                  <option value="середньо-технічна">середньо-технічна</option>
+                  <option value="професійно-технічна">професійно-технічна</option>
+                  <option value="неповна вища">неповна вища</option>
+                  <option value="базова вища">базова вища</option>
+                  <option value="вища">вища</option>
+                </select>
+              </div>
+              <div class="col-md-6 mb-3">
+                <label for="navchalnyy_zaklad" class="form-label">Навчальний заклад</label>
+                <input
+                  type="text"
+                  id="navchalnyy_zaklad"
+                  name="navchalnyy_zaklad"
+                  class="form-control"
+                  placeholder="Напр.: ЗОШ №276"
+                  required
+                />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-8 mb-3">
+                <label for="misto_navchalnogo_zakladu" class="form-label">Місто навчального закладу</label>
+                <input
+                  type="text"
+                  id="misto_navchalnogo_zakladu"
+                  name="misto_navchalnogo_zakladu"
+                  class="form-control"
+                  placeholder="Напр.: Баку"
+                  required
+                />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label for="rik_zakinchennya" class="form-label">Рік закінчення</label>
+                <input
+                  type="number"
+                  id="rik_zakinchennya"
+                  name="rik_zakinchennya"
+                  class="form-control"
+                  placeholder="1996"
+                  min="1950"
+                  max="2100"
+                  required
+                />
+              </div>
             </div>
 
             <hr />
             <h6 class="mb-3">Підписанти</h6>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label for="pidpysant_1_zvannya" class="form-label">ТВО командира частини: звання (називний)</label>
-                <input type="text" id="pidpysant_1_zvannya" name="pidpysant_1_zvannya" class="form-control" value="{{ signatory_defaults.pidpysant_1_zvannya if signatory_defaults else '' }}" required />
-              </div>
-              <div class="col-md-6 mb-3">
-                <label for="pidpysant_1_pib" class="form-label">ТВО командира частини: ПІБ (називний)</label>
-                <input type="text" id="pidpysant_1_pib" name="pidpysant_1_pib" class="form-control" value="{{ signatory_defaults.pidpysant_1_pib if signatory_defaults else '' }}" required />
-              </div>
+            <div class="mb-3">
+              <label for="tvo_kombrig_select" class="form-label">ТВО командира частини</label>
+              <select id="tvo_kombrig_select" class="form-select" required>
+                <option value="">Оберіть підписанта</option>
+                {% for opt in signatory_defaults.kombrig_options %}
+                <option
+                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
+                  {% if opt.zvannya == signatory_defaults.pidpysant_1_zvannya and opt.pib == signatory_defaults.pidpysant_1_pib %}selected{% endif %}
+                >{{ opt.zvannya }} {{ opt.pib }}</option>
+                {% endfor %}
+              </select>
+              <input type="hidden" id="pidpysant_1_zvannya" name="pidpysant_1_zvannya" value="{{ signatory_defaults.pidpysant_1_zvannya }}" required />
+              <input type="hidden" id="pidpysant_1_pib" name="pidpysant_1_pib" value="{{ signatory_defaults.pidpysant_1_pib }}" required />
+            </div>
+            <div class="mb-3">
+              <label for="tvo_kombat_select" class="form-label">ТВО командира батальйону</label>
+              <select id="tvo_kombat_select" class="form-select" required>
+                <option value="">Оберіть підписанта</option>
+                {% for opt in signatory_defaults.kombat_options %}
+                <option
+                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
+                  {% if opt.zvannya == signatory_defaults.pidpysant_2_zvannya and opt.pib == signatory_defaults.pidpysant_2_pib %}selected{% endif %}
+                >{{ opt.zvannya }} {{ opt.pib }}</option>
+                {% endfor %}
+              </select>
+              <input type="hidden" id="pidpysant_2_zvannya" name="pidpysant_2_zvannya" value="{{ signatory_defaults.pidpysant_2_zvannya }}" required />
+              <input type="hidden" id="pidpysant_2_pib" name="pidpysant_2_pib" value="{{ signatory_defaults.pidpysant_2_pib }}" required />
             </div>
 
-            <hr />
-            <h6 class="mb-3">ТВО командира батальйону</h6>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label for="pidpysant_2_zvannya" class="form-label">ТВО командира батальйону: звання</label>
-                <input type="text" id="pidpysant_2_zvannya" name="pidpysant_2_zvannya" class="form-control" value="{{ signatory_defaults.pidpysant_2_zvannya if signatory_defaults else '' }}" required />
-              </div>
-              <div class="col-md-6 mb-3">
-                <label for="pidpysant_2_pib" class="form-label">ТВО командира батальйону: ПІБ</label>
-                <input type="text" id="pidpysant_2_pib" name="pidpysant_2_pib" class="form-control" value="{{ signatory_defaults.pidpysant_2_pib if signatory_defaults else '' }}" required />
-              </div>
-            </div>
-            <div class="mb-3 d-flex gap-2">
-              <button type="button" id="save-signatories-btn" class="btn btn-outline-secondary">
-                <i class="fas fa-save me-1"></i>Зберегти підписантів службової
+            <div class="mb-3">
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#add-signatory-panel" aria-expanded="false">
+                <i class="fas fa-user-plus me-1"></i>Додати підписанта
               </button>
-              <span id="save-signatories-msg" class="small text-muted align-self-center"></span>
+            </div>
+            <div class="collapse mb-3" id="add-signatory-panel">
+              <div class="border rounded p-3 bg-white">
+                <div class="row g-2">
+                  <div class="col-md-3">
+                    <label for="new_signatory_role" class="form-label">Роль</label>
+                    <select id="new_signatory_role" class="form-select">
+                      <option value="kombrig">ТВО командира частини</option>
+                      <option value="kombat">ТВО командира батальйону</option>
+                    </select>
+                  </div>
+                  <div class="col-md-3">
+                    <label for="new_signatory_zvannya" class="form-label">Звання</label>
+                    <input type="text" id="new_signatory_zvannya" class="form-control" placeholder="капітан" />
+                  </div>
+                  <div class="col-md-4">
+                    <label for="new_signatory_pib" class="form-label">ПІБ (називний)</label>
+                    <input type="text" id="new_signatory_pib" class="form-control" placeholder="Ім'я ПРІЗВИЩЕ" />
+                  </div>
+                  <div class="col-md-2 d-flex align-items-end">
+                    <button type="button" id="add-signatory-btn" class="btn btn-primary w-100">
+                      <i class="fas fa-plus me-1"></i>Додати
+                    </button>
+                  </div>
+                </div>
+                <div id="add-signatory-msg" class="small text-muted mt-2"></div>
+              </div>
             </div>
 
             <div class="d-grid">
@@ -109,145 +198,59 @@
 {% endblock %}
 
 {% block extra_css %}
-<style>
-  .autocomplete-container { position: relative; }
-  .autocomplete-suggestions {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: white;
-    border: 1px solid #ced4da;
-    border-top: none;
-    max-height: 200px;
-    overflow-y: auto;
-    z-index: 1000;
-    display: none;
-    border-radius: 0 0 0.375rem 0.375rem;
-  }
-  .autocomplete-suggestion {
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    border-bottom: 1px solid #dee2e6;
-  }
-  .autocomplete-suggestion:hover,
-  .autocomplete-suggestion.selected { background-color: #f8f9fa; }
-  .autocomplete-suggestion:last-child { border-bottom: none; }
-</style>
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
+<link href="{{ url_for('static', filename='css/pib_tom_select.css') }}" rel="stylesheet" />
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
 <script>
   const form = document.getElementById("generation-form");
   const submitButton = document.getElementById("submit-button");
-  const saveSignatoriesBtn = document.getElementById("save-signatories-btn");
-  const saveSignatoriesMsg = document.getElementById("save-signatories-msg");
-  const pibNazivnyi = document.getElementById("pib_nazivnyi");
-  const pibSuggestions = document.getElementById("pib-suggestions");
-  const autoZvanie = document.getElementById("auto_zvanie");
-  const autoPosada = document.getElementById("auto_posada");
-  let currentSuggestions = [];
-  let selectedIndex = -1;
-  let searchTimeout;
 
-  async function searchPIB(query) {
-    if (query.length < 2) {
-      hideSuggestions();
+  function showPibInfoAlert(item) {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    const rank = (item && item.rank) ? String(item.rank).trim() : "";
+    const position = (item && item.position) ? String(item.position).trim() : "";
+    if (!rank && !position) {
+      alertEl.classList.add("d-none");
+      alertEl.textContent = "";
       return;
     }
-    try {
-      const response = await fetch(`/api/search_pib?q=${encodeURIComponent(query)}&context=service`);
-      if (!response.ok) throw new Error(String(response.status));
-      const data = await response.json();
-      if (data.results && data.results.length > 0) showSuggestions(data.results);
-      else hideSuggestions();
-    } catch (error) {
-      console.error("Помилка при пошуку ПІБ:", error);
-      hideSuggestions();
-    }
+    const parts = [];
+    if (rank) parts.push(rank);
+    if (position) parts.push(position);
+    alertEl.textContent = parts.join(" · ");
+    alertEl.classList.remove("d-none");
   }
 
-  function showSuggestions(suggestions) {
-    currentSuggestions = suggestions;
-    selectedIndex = -1;
-    pibSuggestions.innerHTML = "";
-    suggestions.forEach((suggestion) => {
-      const div = document.createElement("div");
-      div.className = "autocomplete-suggestion";
-      div.textContent = suggestion.label;
-      div.addEventListener("click", function () {
-        selectSuggestion(suggestion);
-      });
-      pibSuggestions.appendChild(div);
-    });
-    pibSuggestions.style.display = "block";
+  function hidePibInfoAlert() {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    alertEl.classList.add("d-none");
+    alertEl.textContent = "";
   }
 
-  function hideSuggestions() {
-    pibSuggestions.style.display = "none";
-    currentSuggestions = [];
-    selectedIndex = -1;
+  function applyPibSelection(item) {
+    document.getElementById("zvanie").value = (item && item.rank) || "";
+    document.getElementById("zaimana_posada").value = (item && item.position) || "";
+    document.getElementById("prizvyshche").value = (item && item.prizvyshche) || "";
+    document.getElementById("imya").value = (item && item.imya) || "";
+    document.getElementById("po_batkovi").value = (item && item.po_batkovi) || "";
+    showPibInfoAlert(item);
   }
 
-  function selectSuggestion(suggestion) {
-    pibNazivnyi.value = suggestion.value || "";
-    document.getElementById("zvanie").value = suggestion.rank || "";
-    document.getElementById("zaimana_posada").value = suggestion.position || "";
-    document.getElementById("prizvyshche").value = suggestion.prizvyshche || "";
-    document.getElementById("imya").value = suggestion.imya || "";
-    document.getElementById("po_batkovi").value = suggestion.po_batkovi || "";
-    if (autoZvanie) autoZvanie.value = suggestion.rank || "";
-    if (autoPosada) autoPosada.value = suggestion.position || "";
-    hideSuggestions();
-  }
-
-  function handleKeyNavigation(e) {
-    if (pibSuggestions.style.display === "none") return;
-    const suggestions = pibSuggestions.querySelectorAll(".autocomplete-suggestion");
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
-        updateSelection(suggestions);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        selectedIndex = Math.max(selectedIndex - 1, -1);
-        updateSelection(suggestions);
-        break;
-      case "Enter":
-        e.preventDefault();
-        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
-          selectSuggestion(currentSuggestions[selectedIndex]);
-        }
-        break;
-      case "Escape":
-        hideSuggestions();
-        break;
-    }
-  }
-
-  function updateSelection(suggestions) {
-    suggestions.forEach((suggestion, index) => {
-      suggestion.classList.toggle("selected", index === selectedIndex);
-    });
-  }
-
-  pibNazivnyi.addEventListener("input", function () {
+  function clearPibSelection() {
     document.getElementById("zvanie").value = "";
     document.getElementById("zaimana_posada").value = "";
     document.getElementById("prizvyshche").value = "";
     document.getElementById("imya").value = "";
     document.getElementById("po_batkovi").value = "";
-    if (autoZvanie) autoZvanie.value = "";
-    if (autoPosada) autoPosada.value = "";
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => searchPIB(pibNazivnyi.value), 300);
-  });
-  pibNazivnyi.addEventListener("keydown", handleKeyNavigation);
-  document.addEventListener("click", function (e) {
-    if (!pibNazivnyi.contains(e.target) && !pibSuggestions.contains(e.target)) hideSuggestions();
-  });
+    hidePibInfoAlert();
+  }
 
   function validateDate(dateString) {
     const pattern = /^(\d{2})\.(\d{2})\.(\d{4})$/;
@@ -261,73 +264,205 @@
     return date.getDate() === day && date.getMonth() === month - 1 && date.getFullYear() === year;
   }
 
-  document.getElementById("komisariat_ta_data_prizovu").addEventListener("blur", function () {
-    const m = this.value.match(/(\d{2}\.\d{2}\.\d{4})/);
-    if (!m || !validateDate(m[1])) {
+  document.getElementById("data_pryzovu").addEventListener("blur", function () {
+    const v = String(getTomValue(this) || this.value || "").trim();
+    if (!v || !validateDate(v)) {
       this.setCustomValidity("Вкажіть дату у форматі дд.мм.рррр");
     } else {
       this.setCustomValidity("");
     }
   });
 
-  function signatoriesPayload() {
+  document.getElementById("rik_zakinchennya").addEventListener("blur", function () {
+    const v = String(getTomValue(this) || this.value || "").trim();
+    const year = parseInt(v, 10);
+    const nowY = new Date().getFullYear();
+    if (!/^\d{4}$/.test(v) || year < 1950 || year > nowY) {
+      this.setCustomValidity("Вкажіть рік закінчення (4 цифри)");
+    } else {
+      this.setCustomValidity("");
+    }
+  });
+
+  function parseSignatoryValue(value) {
+    const parts = String(value || "").split("|||");
     return {
-      pidpysant_1_zvannya: document.getElementById("pidpysant_1_zvannya").value.trim(),
-      pidpysant_1_pib: document.getElementById("pidpysant_1_pib").value.trim(),
-      pidpysant_2_zvannya: document.getElementById("pidpysant_2_zvannya").value.trim(),
-      pidpysant_2_pib: document.getElementById("pidpysant_2_pib").value.trim(),
+      zvannya: (parts[0] || "").trim(),
+      pib: (parts[1] || "").trim(),
     };
   }
 
-  async function saveSignatories() {
-    const payload = signatoriesPayload();
-    if (!payload.pidpysant_1_zvannya || !payload.pidpysant_1_pib || !payload.pidpysant_2_zvannya || !payload.pidpysant_2_pib) {
-      saveSignatoriesMsg.textContent = "Заповніть усі поля підписантів";
-      saveSignatoriesMsg.className = "small text-danger align-self-center";
-      return false;
-    }
-    try {
-      saveSignatoriesBtn.disabled = true;
-      const r = await fetch("/api/service_signatories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) {
-        throw new Error(j.error || `HTTP ${r.status}`);
-      }
-      saveSignatoriesMsg.textContent = "Підписанти збережені";
-      saveSignatoriesMsg.className = "small text-success align-self-center";
-      return true;
-    } catch (e) {
-      console.error(e);
-      saveSignatoriesMsg.textContent = "Не вдалося зберегти: " + e.message;
-      saveSignatoriesMsg.className = "small text-danger align-self-center";
-      return false;
-    } finally {
-      saveSignatoriesBtn.disabled = false;
-    }
+  function encodeSignatoryValue(zvannya, pib) {
+    return String(zvannya || "").trim() + "|||" + String(pib || "").trim();
   }
 
-  saveSignatoriesBtn.addEventListener("click", saveSignatories);
+  function syncHiddenFromSelect(selectEl, zvannyaId, pibId) {
+    const parsed = parseSignatoryValue(getTomValue(selectEl));
+    const zv = document.getElementById(zvannyaId);
+    const pib = document.getElementById(pibId);
+    if (zv) zv.value = parsed.zvannya;
+    if (pib) pib.value = parsed.pib;
+  }
 
-  async function loadSavedSignatoriesIfEmpty() {
+  function fillSignatorySelect(selectEl, options, selectedZv, selectedPib) {
+    if (!selectEl) return;
+    const preferred = encodeSignatoryValue(selectedZv, selectedPib);
+    const list = [{ value: "", label: "Оберіть підписанта" }];
+    (options || []).forEach(function (opt) {
+      const zv = (opt.zvannya || "").trim();
+      const pib = (opt.pib || "").trim();
+      if (!zv || !pib) return;
+      const value = encodeSignatoryValue(zv, pib);
+      list.push({ value: value, label: zv + " " + pib });
+    });
+    const preferredOk = preferred !== "|||" ? preferred : "";
+    refreshSelectOptions(selectEl, list, preferredOk);
+  }
+
+  function applySignatoryState(state) {
+    const kombrigZv =
+      state.tvo_kombrig_zvannya || state.pidpysant_1_zvannya || "";
+    const kombrigPib = state.tvo_kombrig_pib || state.pidpysant_1_pib || "";
+    const kombatZv = state.tvo_kombat_zvannya || state.pidpysant_2_zvannya || "";
+    const kombatPib = state.tvo_kombat_pib || state.pidpysant_2_pib || "";
+    fillSignatorySelect(
+      document.getElementById("tvo_kombrig_select"),
+      state.kombrig_options || [],
+      kombrigZv,
+      kombrigPib
+    );
+    fillSignatorySelect(
+      document.getElementById("tvo_kombat_select"),
+      state.kombat_options || [],
+      kombatZv,
+      kombatPib
+    );
+    syncHiddenFromSelect(
+      document.getElementById("tvo_kombrig_select"),
+      "pidpysant_1_zvannya",
+      "pidpysant_1_pib"
+    );
+    syncHiddenFromSelect(
+      document.getElementById("tvo_kombat_select"),
+      "pidpysant_2_zvannya",
+      "pidpysant_2_pib"
+    );
+  }
+
+  async function loadSavedSignatories() {
     try {
-      const r = await fetch("/api/service_signatories");
+      const r = await fetch("/api/vlk_signatories");
       if (!r.ok) return;
       const j = await r.json();
-      const fields = ["pidpysant_1_zvannya", "pidpysant_1_pib", "pidpysant_2_zvannya", "pidpysant_2_pib"];
-      fields.forEach((id) => {
-        const input = document.getElementById(id);
-        if (input && !input.value.trim() && j[id]) input.value = j[id];
+      // Збережений вибір службової має пріоритет над останнім вибором рапортів
+      const s1z = document.getElementById("pidpysant_1_zvannya")?.value || "";
+      const s1p = document.getElementById("pidpysant_1_pib")?.value || "";
+      const s2z = document.getElementById("pidpysant_2_zvannya")?.value || "";
+      const s2p = document.getElementById("pidpysant_2_pib")?.value || "";
+      applySignatoryState({
+        ...j,
+        tvo_kombrig_zvannya: s1z || j.tvo_kombrig_zvannya,
+        tvo_kombrig_pib: s1p || j.tvo_kombrig_pib,
+        tvo_kombat_zvannya: s2z || j.tvo_kombat_zvannya,
+        tvo_kombat_pib: s2p || j.tvo_kombat_pib,
       });
     } catch (_) {}
   }
 
-  document.addEventListener("DOMContentLoaded", loadSavedSignatoriesIfEmpty);
+  async function addSignatory() {
+    const msg = document.getElementById("add-signatory-msg");
+    const role = getTomValue("new_signatory_role");
+    const zvannya = String(getTomValue("new_signatory_zvannya") || "").trim();
+    const pib = String(getTomValue("new_signatory_pib") || "").trim();
+    if (!zvannya || !pib) {
+      msg.textContent = "Вкажіть звання та ПІБ";
+      msg.className = "small text-danger mt-2";
+      return;
+    }
+    try {
+      document.getElementById("add-signatory-btn").disabled = true;
+      const r = await fetch("/api/vlk_signatories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add_option",
+          role: role,
+          zvannya: zvannya,
+          pib: pib,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      applySignatoryState(j);
+      setTomValue("new_signatory_zvannya", "");
+      setTomValue("new_signatory_pib", "");
+      msg.textContent = "Підписанта додано і вибрано";
+      msg.className = "small text-success mt-2";
+    } catch (e) {
+      msg.textContent = "Не вдалося додати: " + e.message;
+      msg.className = "small text-danger mt-2";
+    } finally {
+      document.getElementById("add-signatory-btn").disabled = false;
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    initFormTomSelects("#generation-form", {
+      skipIds: [
+        "pib_nazivnyi",
+        "zvanie",
+        "zaimana_posada",
+        "prizvyshche",
+        "imya",
+        "po_batkovi",
+        "pidpysant_1_zvannya",
+        "pidpysant_1_pib",
+        "pidpysant_2_zvannya",
+        "pidpysant_2_pib",
+      ],
+      searchableIds: ["tvo_kombrig_select", "tvo_kombat_select"],
+      clearButtonIds: ["tvo_kombrig_select", "tvo_kombat_select"],
+      onChangeMap: {
+        tvo_kombrig_select: function () {
+          syncHiddenFromSelect(
+            document.getElementById("tvo_kombrig_select"),
+            "pidpysant_1_zvannya",
+            "pidpysant_1_pib"
+          );
+        },
+        tvo_kombat_select: function () {
+          syncHiddenFromSelect(
+            document.getElementById("tvo_kombat_select"),
+            "pidpysant_2_zvannya",
+            "pidpysant_2_pib"
+          );
+        },
+      },
+    });
+    loadSavedSignatories();
+    initPibTomSelect({
+      placeholder: "Почніть вводити Прізвище Ім'я по-батькові...",
+      onSelect: applyPibSelection,
+      onClear: clearPibSelection,
+    });
+
+    const addSignatoryBtn = document.getElementById("add-signatory-btn");
+    if (addSignatoryBtn) addSignatoryBtn.addEventListener("click", addSignatory);
+
+  });
 
   form.addEventListener("submit", function () {
+    flushTomInputs(form);
+    syncHiddenFromSelect(
+      document.getElementById("tvo_kombrig_select"),
+      "pidpysant_1_zvannya",
+      "pidpysant_1_pib"
+    );
+    syncHiddenFromSelect(
+      document.getElementById("tvo_kombat_select"),
+      "pidpysant_2_zvannya",
+      "pidpysant_2_pib"
+    );
     if (form.checkValidity()) {
       showLoading();
       submitButton.disabled = true;

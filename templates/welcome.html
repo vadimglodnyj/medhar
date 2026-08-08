@@ -1,15 +1,15 @@
 {% extends "base.html" %}
-{% block title %}МедХар — як почати{% endblock %}
+{% block title %}Медичний пункт батальйону — як почати{% endblock %}
 {% block content %}
 <div class="container py-4">
   <div class="row justify-content-center">
     <div class="col-lg-9">
-      <div class="text-center mb-4">
-        <h1 class="display-6">
-          <i class="fas fa-hand-sparkles text-primary me-2"></i>Вітаємо в МедХар
+      <div class="mh-hero">
+        <h1 class="display-6 mb-2">
+          <i class="fas fa-hospital me-2 text-primary"></i>Медичний пункт батальйону
         </h1>
         <p class="lead text-muted mb-0">
-          Локальна генерація медичної характеристики з Excel. Нижче — коротка інструкція.
+          Локальна генерація медичних документів з Excel. Нижче — коротка інструкція.
         </p>
       </div>
 
@@ -33,9 +33,10 @@
       {% endif %}
 
       <div class="card mb-4">
-        <div class="card-header bg-primary text-white">
-          <h2 class="h5 mb-0">
-            <i class="fas fa-database me-2"></i>Що покласти в папку <code>data</code>
+        <div class="card-header">
+          <h2 class="mh-section-title">
+            <i class="fas fa-database"></i>
+            Що покласти в папку <code>data</code>
           </h2>
         </div>
         <div class="card-body">
@@ -59,6 +60,12 @@
                     <code>treatments_2026.xlsx</code>. Можна кілька років одночасно.
                   </td>
                 </tr>
+                <tr>
+                  <td><code>base.xlsx</code></td>
+                  <td>
+                    Кадрова база для рапортів і службової характеристики (ПІБ, звання, посада).
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -66,14 +73,17 @@
             Потрібні колонки: <strong>Прізвище, Ім'я, По батькові</strong> або колонка
             <strong>ПІБ</strong>. Файли <code>*.xlsx</code> у <code>data</code> не
             потрапляють у git — їх додаєте лише у себе на диску.
+            Оновлювати файли зручніше на сторінці
+            <a href="{{ url_for('databases') }}">Бази даних</a>.
           </p>
         </div>
       </div>
 
       <div class="card mb-4">
-        <div class="card-header bg-info text-white">
-          <h2 class="h5 mb-0">
-            <i class="fas fa-download me-2"></i>Встановлення (мінімум для роботи)
+        <div class="card-header">
+          <h2 class="mh-section-title">
+            <i class="fas fa-download"></i>
+            Встановлення (мінімум для роботи)
           </h2>
         </div>
         <div class="card-body">
@@ -107,18 +117,18 @@
         </div>
       </div>
 
-      <div class="text-center">
+      <div class="text-center pb-2">
         <a
-          class="btn btn-primary btn-lg px-5"
+          class="btn btn-primary btn-lg px-4"
           href="{{ url_for('medical_characteristic') }}"
         >
           <i class="fas fa-file-medical me-2"></i>До форми генерації
         </a>
         <a
-          class="btn btn-outline-primary btn-lg px-4 ms-2 mt-2 mt-sm-0"
+          class="btn btn-outline-primary btn-lg px-4 ms-sm-2 mt-2 mt-sm-0"
           href="{{ url_for('vlk_report') }}"
         >
-          <i class="fas fa-file-lines me-2"></i>Рапорт на ВЛК
+          <i class="fas fa-file-lines me-2"></i>Рапорти
         </a>
         <p class="small text-muted mt-3 mb-0">
           Після копіювання файлів у <code>data</code> оновіть сторінку (F5), щоб

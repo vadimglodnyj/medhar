@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Медична характеристика - МедХар{%
+{% extends "base.html" %} {% block title %}Медична характеристика - Медичний пункт батальйону{%
 endblock %} {% block content %}
 <div class="container position-relative">
   <div
@@ -26,85 +26,12 @@ endblock %} {% block content %}
   <div class="row justify-content-center">
     <div class="col-lg-8">
       <div class="page-header text-center">
-        <h1><i class="fas fa-file-medical me-3"></i>Медична характеристика</h1>
+        <h1><i class="fas fa-file-medical me-2"></i>Медична характеристика</h1>
         <p class="lead">Генерація медичної характеристики військовослужбовця</p>
       </div>
 
-      <!-- Статистика бази даних -->
-      <div class="card mb-4">
-        <div class="card-header bg-info text-white">
-          <h6 class="mb-0">
-            <i class="fas fa-database me-2"></i>Статистика бази даних
-          </h6>
-        </div>
-        <div class="card-body">
-          <p class="mb-0">
-            <strong>База даних:</strong>
-            <span id="stats-text">Завантаження...</span>
-          </p>
-        </div>
-      </div>
-
-      <!-- Оновлення файлу treatments_YYYY.xlsx -->
-      <div class="card mb-4" id="treatments-upload-card">
-        <div class="card-header bg-secondary text-white">
-          <h6 class="mb-0">
-            <i class="fas fa-file-upload me-2"></i>Оновити базу за рік (Excel)
-          </h6>
-        </div>
-        <div class="card-body">
-          <p class="small text-muted mb-2" id="treatments-sources-text">
-            Завантаження списку файлів…
-          </p>
-          <form id="treatments-upload-form" class="row g-2 align-items-end">
-            <div class="col-md-3">
-              <label class="form-label" for="treatments-upload-year">Рік</label>
-              <input
-                type="number"
-                class="form-control"
-                id="treatments-upload-year"
-                name="year"
-                min="1990"
-                max="2100"
-                required
-              />
-            </div>
-            <div class="col-md-5">
-              <label class="form-label" for="treatments-upload-file"
-                >Файл .xlsx</label
-              >
-              <input
-                type="file"
-                class="form-control"
-                id="treatments-upload-file"
-                name="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                required
-              />
-            </div>
-            <div class="col-md-4">
-              <button
-                type="submit"
-                class="btn btn-secondary w-100"
-                id="treatments-upload-btn"
-              >
-                <i class="fas fa-save me-1"></i>Замінити файл на диску
-              </button>
-            </div>
-          </form>
-          <p class="small text-muted mt-2 mb-0">
-            Після перевірки старий файл обраного року замінюється новим; кеш
-            даних оновлюється автоматично.
-          </p>
-          <div
-            id="treatments-upload-alert"
-            class="alert d-none mt-2 mb-0"
-            role="alert"
-          ></div>
-        </div>
-      </div>
-
       <!-- Відображення повідомлень -->
+      <div id="generation-feedback" class="d-none"></div>
       {% with messages = get_flashed_messages(with_categories=true) %} {% if
       messages %} {% for category, message in messages %}
       <div
@@ -122,8 +49,8 @@ endblock %} {% block content %}
       <!-- Форма генерації -->
       <div class="card">
         <div class="card-header">
-          <h5 class="mb-0">
-            <i class="fas fa-edit me-2"></i>Заповніть дані для генерації
+          <h5 class="mh-section-title mb-0">
+            <i class="fas fa-edit"></i>Заповніть дані для генерації
           </h5>
         </div>
         <div class="card-body">
@@ -133,38 +60,42 @@ endblock %} {% block content %}
               <label for="pib_nazivnyi" class="form-label">
                 <i class="fas fa-user me-1"></i>ПІБ (в називному відмінку)
               </label>
-              <div class="autocomplete-container">
+              <select
+                id="pib_nazivnyi"
+                name="pib_nazivnyi"
+                required
+                placeholder="Почніть вводити ПІБ для пошуку..."
+              ></select>
+              <div
+                id="pib-info-alert"
+                class="alert alert-success mt-2 mb-0 py-2 d-none"
+                role="status"
+              ></div>
+              <div class="mt-2">
+                <button
+                  type="button"
+                  id="toggle-pib-rodovyi"
+                  class="btn btn-link btn-sm px-0"
+                >
+                  Показати ПІБ (в родовому відмінку)
+                </button>
+              </div>
+              <div id="pib-rodovyi-wrap" class="d-none mt-2">
+                <label for="pib_rodovyi" class="form-label">
+                  <i class="fas fa-user-tag me-1"></i>ПІБ (в родовому відмінку)
+                </label>
                 <input
                   type="text"
-                  id="pib_nazivnyi"
-                  name="pib_nazivnyi"
+                  id="pib_rodovyi"
+                  name="pib_rodovyi"
                   class="form-control"
-                  placeholder="Почніть вводити ПІБ для пошуку..."
-                  required
+                  placeholder="Заповниться автоматично з називного; можна виправити вручну"
                 />
-                <div
-                  id="pib-suggestions"
-                  class="autocomplete-suggestions"
-                ></div>
-              </div>
-            </div>
-
-            <!-- ПІБ в родовому відмінку -->
-            <div class="mb-3">
-              <label for="pib_rodovyi" class="form-label">
-                <i class="fas fa-user-tag me-1"></i>ПІБ (в родовому відмінку)
-              </label>
-              <input
-                type="text"
-                id="pib_rodovyi"
-                name="pib_rodovyi"
-                class="form-control"
-                placeholder="Заповниться автоматично з називного; можна виправити вручну"
-              />
-              <div class="form-text text-muted">
-                <i class="fas fa-magic me-1"></i>
-                Родовий відмінок підставляється автоматично (прізвище у верхньому регістрі).
-                Якщо форма неточна — відредагуйте поле вручну перед генерацією.
+                <div class="form-text text-muted">
+                  <i class="fas fa-magic me-1"></i>
+                  Родовий відмінок підставляється автоматично. Якщо форма
+                  неточна — відредагуйте поле вручну перед генерацією.
+                </div>
               </div>
             </div>
 
@@ -179,7 +110,6 @@ endblock %} {% block content %}
                 name="enlistment_date"
                 class="form-select"
                 required
-                onchange="toggleCustomDate()"
               >
                 <option value="">Оберіть варіант</option>
                 <option value="з моменту призову">З моменту призову</option>
@@ -207,7 +137,6 @@ endblock %} {% block content %}
                 name="observation_end"
                 class="form-select"
                 required
-                onchange="toggleObservationEndCustomDate()"
               >
                 <option value="">Оберіть варіант</option>
                 <option value="по теперішній час">По теперішній час</option>
@@ -225,82 +154,81 @@ endblock %} {% block content %}
               />
             </div>
 
+            <div id="manual-soldier-block">
+              <hr />
+
+              <!-- Додаткові поля -->
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="mb-3">
+                    <label for="zvanie" class="form-label">
+                      <i class="fas fa-shield-alt me-1"></i>Військове звання
+                    </label>
+                    <select id="zvanie" name="zvanie" class="form-select">
+                      <option value="">Оберіть звання</option>
+                      <option value="солдат">солдат</option>
+                      <option value="старший солдат">старший солдат</option>
+                      <option value="молодший сержант">молодший сержант</option>
+                      <option value="сержант">сержант</option>
+                      <option value="старший сержант">старший сержант</option>
+                      <option value="головний сержант">головний сержант</option>
+                      <option value="штаб-сержант">штаб-сержант</option>
+                      <option value="майстер-сержант">майстер-сержант</option>
+                      <option value="старший майстер-сержант">
+                        старший майстер-сержант
+                      </option>
+                      <option value="головний майстер-сержант">
+                        головний майстер-сержант
+                      </option>
+                      <option value="молодший лейтенант">
+                        молодший лейтенант
+                      </option>
+                      <option value="лейтенант">лейтенант</option>
+                      <option value="старший лейтенант">старший лейтенант</option>
+                      <option value="капітан">капітан</option>
+                      <option value="майор">майор</option>
+                      <option value="підполковник">підполковник</option>
+                      <option value="полковник">полковник</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="mb-3">
+                    <label for="sluzhba_type" class="form-label">
+                      <i class="fas fa-clipboard-list me-1"></i>Вид служби
+                    </label>
+                    <select
+                      id="sluzhba_type"
+                      name="sluzhba_type"
+                      class="form-select"
+                    >
+                      <option value="під час мобілізації">
+                        під час мобілізації
+                      </option>
+                      <option value="за контрактом">за контрактом</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <label for="birth_date" class="form-label">
+                  <i class="fas fa-birthday-cake me-1"></i>Дата народження
+                  (дд.мм.рррр)
+                </label>
+                <input
+                  type="text"
+                  id="birth_date"
+                  name="birth_date"
+                  class="form-control"
+                  placeholder="дд.мм.рррр"
+                  pattern="\d{2}\.\d{2}\.\d{4}"
+                  title="Введіть дату у форматі дд.мм.рррр"
+                />
+              </div>
+            </div>
+
             <hr />
-            <div class="alert alert-info text-center">
-              <i class="fas fa-info-circle me-2"></i>
-              <strong>Заповнюйте, якщо військового немає в таблиці</strong>
-            </div>
-
-            <!-- Додаткові поля -->
-            <div class="row">
-              <div class="col-md-6">
-                <div class="mb-3">
-                  <label for="zvanie" class="form-label">
-                    <i class="fas fa-shield-alt me-1"></i>Військове звання
-                  </label>
-                  <select id="zvanie" name="zvanie" class="form-select">
-                    <option value="">Оберіть звання</option>
-                    <option value="солдат">солдат</option>
-                    <option value="старший солдат">старший солдат</option>
-                    <option value="молодший сержант">молодший сержант</option>
-                    <option value="сержант">сержант</option>
-                    <option value="старший сержант">старший сержант</option>
-                    <option value="головний сержант">головний сержант</option>
-                    <option value="штаб-сержант">штаб-сержант</option>
-                    <option value="майстер-сержант">майстер-сержант</option>
-                    <option value="старший майстер-сержант">
-                      старший майстер-сержант
-                    </option>
-                    <option value="головний майстер-сержант">
-                      головний майстер-сержант
-                    </option>
-                    <option value="молодший лейтенант">
-                      молодший лейтенант
-                    </option>
-                    <option value="лейтенант">лейтенант</option>
-                    <option value="старший лейтенант">старший лейтенант</option>
-                    <option value="капітан">капітан</option>
-                    <option value="майор">майор</option>
-                    <option value="підполковник">підполковник</option>
-                    <option value="полковник">полковник</option>
-                  </select>
-                </div>
-              </div>
-              <div class="col-md-6">
-                <div class="mb-3">
-                  <label for="sluzhba_type" class="form-label">
-                    <i class="fas fa-clipboard-list me-1"></i>Вид служби
-                  </label>
-                  <select
-                    id="sluzhba_type"
-                    name="sluzhba_type"
-                    class="form-select"
-                  >
-                    <option value="під час мобілізації">
-                      під час мобілізації
-                    </option>
-                    <option value="за контрактом">за контрактом</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div class="mb-3">
-              <label for="birth_date" class="form-label">
-                <i class="fas fa-birthday-cake me-1"></i>Дата народження
-                (дд.мм.рррр)
-              </label>
-              <input
-                type="text"
-                id="birth_date"
-                name="birth_date"
-                class="form-control"
-                placeholder="дд.мм.рррр"
-                pattern="\d{2}\.\d{2}\.\d{4}"
-                title="Введіть дату у форматі дд.мм.рррр"
-              />
-            </div>
-
             <div class="mb-3">
               <label for="signatory" class="form-label">
                 <i class="fas fa-signature me-1"></i>Підписує характеристику
@@ -356,51 +284,19 @@ endblock %} {% block content %}
   </div>
 </div>
 {% endblock %} {% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
+<link href="{{ url_for('static', filename='css/pib_tom_select.css') }}" rel="stylesheet" />
 <style>
-  .autocomplete-container {
-    position: relative;
-  }
-
-  .autocomplete-suggestions {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: white;
-    border: 1px solid #ced4da;
-    border-top: none;
-    max-height: 200px;
-    overflow-y: auto;
-    z-index: 1000;
-    display: none;
-    border-radius: 0 0 0.375rem 0.375rem;
-  }
-
-  .autocomplete-suggestion {
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    border-bottom: 1px solid #dee2e6;
-  }
-
-  .autocomplete-suggestion:hover,
-  .autocomplete-suggestion.selected {
-    background-color: #f8f9fa;
-  }
-
-  .autocomplete-suggestion:last-child {
-    border-bottom: none;
-  }
-
   .treatments-preload-overlay {
     position: absolute;
     inset: 0;
-    z-index: 2000;
+    z-index: 1020;
     display: flex;
     align-items: flex-start;
     justify-content: center;
     padding-top: 4rem;
-    background: rgba(240, 248, 255, 0.92);
-    backdrop-filter: blur(2px);
+    background: rgba(232, 244, 243, 0.92);
+    backdrop-filter: blur(3px);
   }
 
   .treatments-preload-inner {
@@ -416,15 +312,15 @@ endblock %} {% block content %}
   }
 </style>
 {% endblock %} {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
 <script>
   const form = document.getElementById("generation-form");
   const submitButton = document.getElementById("submit-button");
-  const pibNazivnyi = document.getElementById("pib_nazivnyi");
   const pibRodovyi = document.getElementById("pib_rodovyi");
-  const pibSuggestions = document.getElementById("pib-suggestions");
+  let pibTomSelect = null;
 
-  let currentSuggestions = [];
-  let selectedIndex = -1;
   /** Пошук ПІБ лише після готовності кешу на сервері (або після зняття оверлею). */
   window.__treatmentsReady = false;
 
@@ -443,7 +339,6 @@ endblock %} {% block content %}
     dismissBtn.addEventListener("click", () => {
       window.__treatmentsReady = true;
       hideOverlay();
-      loadDatabaseStats();
     });
 
     for (;;) {
@@ -483,31 +378,6 @@ endblock %} {% block content %}
     }
   }
 
-  // Завантаження статистики бази даних
-  async function loadDatabaseStats() {
-    try {
-      const response = await fetch("/api/stats");
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const stats = await response.json();
-      if (stats.error) {
-        document.getElementById("stats-text").textContent =
-          "Помилка завантаження";
-        return;
-      }
-      const totalRecords = stats.total_records ?? stats.total_treatments ?? 0;
-      const uniquePatients = stats.unique_patients ?? stats.total_patients ?? 0;
-      document.getElementById(
-        "stats-text"
-      ).textContent = `${totalRecords} записів, ${uniquePatients} унікальних пацієнтів`;
-    } catch (error) {
-      console.error("Помилка при завантаженні статистики:", error);
-      document.getElementById("stats-text").textContent =
-        "Помилка завантаження";
-    }
-  }
-
   /** Якщо кеш з’явився після /api/stats (наприклад, після невдалого прогріву), прибираємо оверлей. */
   async function syncPreloadOverlayWithServer() {
     try {
@@ -526,80 +396,8 @@ endblock %} {% block content %}
     } catch (_) {}
   }
 
-  async function loadTreatmentsSources() {
-    const el = document.getElementById("treatments-sources-text");
-    const yearInput = document.getElementById("treatments-upload-year");
-    if (!el) return;
-    try {
-      const r = await fetch("/api/treatments_sources");
-      if (!r.ok) throw new Error(String(r.status));
-      const d = await r.json();
-      const names = (d.year_files || []).map((x) => x.filename).join(", ");
-      let line = "";
-      if (names) {
-        line = `Підключені річні файли: ${names}`;
-        if (d.has_final) line += " + treatments_final.xlsx";
-      } else if (d.has_final) {
-        line =
-          "Лише treatments_final.xlsx (за потреби додайте treatments_YYYY.xlsx у папку data/)";
-      } else {
-        line =
-          "Немає файлів — додайте у data/ файли treatments_YYYY.xlsx або treatments_final.xlsx";
-      }
-      el.textContent = line;
-      if (yearInput && yearInput.dataset.touched !== "1") {
-        yearInput.value = d.calendar_year;
-      }
-    } catch (e) {
-      console.error(e);
-      el.textContent = "Не вдалося отримати список файлів.";
-    }
-  }
-
   document.addEventListener("DOMContentLoaded", () => {
-    loadTreatmentsSources();
-    document.getElementById("treatments-upload-year")?.addEventListener("input", function () {
-      this.dataset.touched = "1";
-    });
-    document
-      .getElementById("treatments-upload-form")
-      ?.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const btn = document.getElementById("treatments-upload-btn");
-        const alertEl = document.getElementById("treatments-upload-alert");
-        const fd = new FormData(e.target);
-        alertEl.classList.add("d-none");
-        btn.disabled = true;
-        try {
-          const r = await fetch("/api/treatments_upload", {
-            method: "POST",
-            body: fd,
-          });
-          const j = await r.json().catch(() => ({}));
-          if (!r.ok || !j.ok) {
-            alertEl.textContent = j.error || `Помилка ${r.status}`;
-            alertEl.className = "alert alert-danger mt-2 mb-0";
-            alertEl.classList.remove("d-none");
-            return;
-          }
-          alertEl.textContent = `Збережено ${j.filename} (${j.rows} рядків).`;
-          alertEl.className = "alert alert-success mt-2 mb-0";
-          alertEl.classList.remove("d-none");
-          await loadTreatmentsSources();
-          await loadDatabaseStats();
-        } catch (err) {
-          console.error(err);
-          alertEl.textContent =
-            "Мережева помилка або сервер недоступний.";
-          alertEl.className = "alert alert-danger mt-2 mb-0";
-          alertEl.classList.remove("d-none");
-        } finally {
-          btn.disabled = false;
-        }
-      });
-
     waitForTreatmentsReady().then(async () => {
-      await loadDatabaseStats();
       await syncPreloadOverlayWithServer();
     });
   });
@@ -609,155 +407,115 @@ endblock %} {% block content %}
     return a ? a[1] : "";
   }
 
-  // Функція для пошуку ПІБ
-  async function searchPIB(query) {
-    if (!window.__treatmentsReady) {
-      hideSuggestions();
-      return;
-    }
-    if (query.length < 2) {
-      hideSuggestions();
-      return;
-    }
-
+  async function fillRodovyi(value) {
+    const q = (value || "").trim();
+    if (q.length < 3) return;
     try {
-      const response = await fetch(
-        `/api/search_pib?q=${encodeURIComponent(query)}`
-      );
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
-      if (data.results && data.results.length > 0) {
-        showSuggestions(data.results);
-      } else {
-        hideSuggestions();
-      }
-    } catch (error) {
-      console.error("Помилка при пошуку ПІБ:", error);
-      hideSuggestions();
+      const r = await fetch("/api/pib_genitive?q=" + encodeURIComponent(q));
+      const j = await r.json();
+      if (j.genitive) setTomValue(pibRodovyi, j.genitive);
+    } catch (e) {
+      console.error(e);
     }
   }
 
-  // Показати пропозиції
-  function showSuggestions(suggestions) {
-    currentSuggestions = suggestions;
-    selectedIndex = -1;
-    pibSuggestions.innerHTML = "";
-
-    suggestions.forEach((suggestion, index) => {
-      const div = document.createElement("div");
-      div.className = "autocomplete-suggestion";
-      div.textContent = suggestion.label;
-      div.dataset.value = suggestion.value;
-      div.dataset.index = index;
-
-      div.addEventListener("click", function () {
-        selectSuggestion(suggestion);
-      });
-
-      pibSuggestions.appendChild(div);
-    });
-
-    pibSuggestions.style.display = "block";
+  function formatBirthDateDisplay(raw) {
+    const v = String(raw || "").trim();
+    if (!v) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+      const [y, m, d] = v.split("-");
+      return `${d}.${m}.${y}`;
+    }
+    return v;
   }
 
-  // Приховати пропозиції
-  function hideSuggestions() {
-    pibSuggestions.style.display = "none";
-    currentSuggestions = [];
-    selectedIndex = -1;
+  function showPibInfoAlert(item) {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    const rank = (item && item.rank) ? String(item.rank).trim() : "";
+    const birth = formatBirthDateDisplay(item && item.birth_date);
+    const parts = [];
+    if (rank) parts.push(rank);
+    if (birth) parts.push("н. " + birth);
+    if (!parts.length) {
+      alertEl.classList.add("d-none");
+      alertEl.textContent = "";
+      return;
+    }
+    alertEl.textContent = parts.join(" · ");
+    alertEl.classList.remove("d-none");
   }
 
-  // Вибрати пропозицію
-  function selectSuggestion(suggestion) {
-    const value =
-      typeof suggestion === "string" ? suggestion : suggestion.value;
-    const data = typeof suggestion === "object" ? suggestion : null;
+  function hidePibInfoAlert() {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    alertEl.classList.add("d-none");
+    alertEl.textContent = "";
+  }
 
-    pibNazivnyi.value = value;
-    pibRodovyi.value = "";
+  function setManualSoldierBlockVisible(visible) {
+    const block = document.getElementById("manual-soldier-block");
+    if (!block) return;
+    block.style.display = visible ? "" : "none";
+  }
 
-    (async () => {
-      try {
-        const r = await fetch(
-          "/api/pib_genitive?q=" + encodeURIComponent(value)
-        );
-        const j = await r.json();
-        if (j.genitive) pibRodovyi.value = j.genitive;
-      } catch (e) {
-        console.error(e);
-      }
-    })();
+  function isFoundInTreatments(item) {
+    if (!item) return false;
+    if (item.source === "treatments") return true;
+    return !!(item.rank || item.birth_date);
+  }
 
-    // Автозаповнення звання якщо є дані
-    if (data && data.rank) {
+  function applyPibSelection(item) {
+    const value = (item && item.value) || "";
+    setTomValue(pibRodovyi, "");
+    fillRodovyi(value);
+
+    const found = isFoundInTreatments(item);
+    setManualSoldierBlockVisible(!found);
+    if (found) {
+      showPibInfoAlert(item);
+    } else {
+      hidePibInfoAlert();
+    }
+
+    if (item && item.rank) {
       const rankSelect = document.getElementById("zvanie");
       if (rankSelect) {
+        const rank = String(item.rank);
+        let matched = "";
         for (let option of rankSelect.options) {
-          if (option.value.toLowerCase() === data.rank.toLowerCase()) {
-            rankSelect.value = option.value;
+          if (option.value.toLowerCase() === rank.toLowerCase()) {
+            matched = option.value;
             break;
           }
         }
+        setTomValue(rankSelect, matched || rank);
       }
     }
 
-    // Автозаповнення дати народження якщо є дані
-    if (data && data.birth_date) {
+    if (item && item.birth_date) {
       const birthDateInput = document.getElementById("birth_date");
-      if (birthDateInput && !birthDateInput.value) {
-        const v = String(data.birth_date).trim();
-        // Підтримуємо формати YYYY-MM-DD або DD.MM.YYYY
-        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
-          const [y, m, d] = v.split("-");
-          birthDateInput.value = `${d}.${m}.${y}`;
-        } else if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) {
-          birthDateInput.value = v;
-        }
+      if (birthDateInput) {
+        const formatted = formatBirthDateDisplay(item.birth_date);
+        if (formatted) setTomValue(birthDateInput, formatted);
       }
     }
-
-    hideSuggestions();
   }
 
-  // Обробка клавіш для навігації
-  function handleKeyNavigation(e) {
-    if (pibSuggestions.style.display === "none") return;
-
-    const suggestions = pibSuggestions.querySelectorAll(
-      ".autocomplete-suggestion"
-    );
-
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
-        updateSelection(suggestions);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        selectedIndex = Math.max(selectedIndex - 1, -1);
-        updateSelection(suggestions);
-        break;
-      case "Enter":
-        e.preventDefault();
-        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
-          const suggestionData = currentSuggestions[selectedIndex];
-          selectSuggestion(suggestionData);
-        }
-        break;
-      case "Escape":
-        hideSuggestions();
-        break;
-    }
+  function clearPibSelection() {
+    setTomValue(pibRodovyi, "");
+    hidePibInfoAlert();
+    setManualSoldierBlockVisible(true);
   }
 
-  // Оновити виділення
-  function updateSelection(suggestions) {
-    suggestions.forEach((suggestion, index) => {
-      suggestion.classList.toggle("selected", index === selectedIndex);
-    });
+  function syncPibRodovyiToggleLabel() {
+    const wrap = document.getElementById("pib-rodovyi-wrap");
+    const btn = document.getElementById("toggle-pib-rodovyi");
+    if (!wrap || !btn) return;
+    const open = !wrap.classList.contains("d-none");
+    btn.textContent = open
+      ? "Сховати ПІБ (в родовому відмінку)"
+      : "Показати ПІБ (в родовому відмінку)";
   }
 
   // Валідація дати
@@ -782,62 +540,58 @@ endblock %} {% block content %}
     );
   }
 
-  // Автозаповнення родового відмінку та пошук ПІБ
-  let searchTimeout;
-  let rodovyiFetchTimeout;
+  document.addEventListener("DOMContentLoaded", function () {
+    initFormTomSelects("#generation-form", {
+      skipIds: [
+        "pib_nazivnyi",
+        "no_diagnosis",
+        "enlistment_date_custom",
+        "observation_end_custom",
+      ],
+      selectCreateIds: ["zvanie"],
+      onChangeMap: {
+        enlistment_date: function () {
+          toggleCustomDate();
+        },
+        observation_end: function () {
+          toggleObservationEndCustomDate();
+        },
+      },
+    });
 
-  function scheduleRodovyiFromNazivnyi() {
-    clearTimeout(rodovyiFetchTimeout);
-    rodovyiFetchTimeout = setTimeout(async () => {
-      const q = pibNazivnyi.value.trim();
-      if (q.length < 3) return;
-      try {
-        const r = await fetch(
-          "/api/pib_genitive?q=" + encodeURIComponent(q)
-        );
-        const j = await r.json();
-        if (j.genitive) pibRodovyi.value = j.genitive;
-      } catch (e) {
-        console.error(e);
-      }
-    }, 450);
-  }
+    document
+      .getElementById("toggle-pib-rodovyi")
+      ?.addEventListener("click", function () {
+        const wrap = document.getElementById("pib-rodovyi-wrap");
+        if (!wrap) return;
+        wrap.classList.toggle("d-none");
+        syncPibRodovyiToggleLabel();
+      });
+    syncPibRodovyiToggleLabel();
 
-  pibNazivnyi.addEventListener("input", function () {
-    pibRodovyi.value = "";
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-      searchPIB(pibNazivnyi.value);
-    }, 300);
-    scheduleRodovyiFromNazivnyi();
-  });
+    pibTomSelect = initPibTomSelect({
+      context: "",
+      allowCreate: true,
+      placeholder: "Почніть вводити ПІБ для пошуку...",
+      shouldLoad: function (query) {
+        return window.__treatmentsReady && (query || "").trim().length >= 2;
+      },
+      onSelect: applyPibSelection,
+      onClear: clearPibSelection,
+    });
 
-  pibNazivnyi.addEventListener("blur", function () {
-    const q = pibNazivnyi.value.trim();
-    if (q.length >= 3 && !pibRodovyi.value.trim()) {
-      scheduleRodovyiFromNazivnyi();
-    }
-  });
-
-  pibNazivnyi.addEventListener("keydown", handleKeyNavigation);
-
-  // Приховати пропозиції при кліку поза полем
-  document.addEventListener("click", function (e) {
-    if (!pibNazivnyi.contains(e.target) && !pibSuggestions.contains(e.target)) {
-      hideSuggestions();
-    }
+    toggleCustomDate();
+    toggleObservationEndCustomDate();
   });
 
   // Валідація полів
   document
     .getElementById("enlistment_date")
     .addEventListener("change", function () {
-      if (!this.value) {
+      const value = getTomValue(this);
+      if (!value) {
         this.setCustomValidity("Оберіть варіант дати призову");
-      } else if (
-        this.value === "з моменту призову" ||
-        this.value === "custom"
-      ) {
+      } else if (value === "з моменту призову" || value === "custom") {
         this.setCustomValidity("");
       } else {
         this.setCustomValidity("Оберіть валідний варіант");
@@ -872,11 +626,14 @@ endblock %} {% block content %}
       }
     });
 
-  form.addEventListener("submit", function () {
+  form.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    flushTomInputs(form);
+
     const enlistmentSelect = document.getElementById("enlistment_date");
     const customInput = document.getElementById("enlistment_date_custom");
 
-    if (enlistmentSelect.value === "custom" && !customInput.value) {
+    if (getTomValue(enlistmentSelect) === "custom" && !customInput.value) {
       customInput.setCustomValidity("Вкажіть конкретну дату");
       customInput.reportValidity();
       return false;
@@ -884,46 +641,145 @@ endblock %} {% block content %}
 
     const observationSelect = document.getElementById("observation_end");
     const observationCustom = document.getElementById("observation_end_custom");
-    if (observationSelect.value === "custom" && !observationCustom.value) {
+    if (getTomValue(observationSelect) === "custom" && !observationCustom.value) {
       observationCustom.setCustomValidity("Вкажіть конкретну дату");
       observationCustom.reportValidity();
       return false;
     }
 
-    if (form.checkValidity()) {
-      showLoading();
-      submitButton.disabled = true;
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return false;
+    }
 
-      let cookieCheck = setInterval(function () {
-        if (getCookie("fileDownload") === "true") {
-          clearInterval(cookieCheck);
-          hideLoading();
-          submitButton.disabled = false;
-          document.cookie =
-            "fileDownload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    const feedback = document.getElementById("generation-feedback");
+    function showFeedback(kind, message) {
+      if (!feedback) return;
+      feedback.className =
+        "alert alert-" +
+        (kind === "error" ? "danger" : "success") +
+        " alert-dismissible fade show";
+      feedback.innerHTML =
+        message +
+        '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+      feedback.classList.remove("d-none");
+    }
+
+    function applyResolvedFields(resolved, source) {
+      if (!resolved) return;
+      const pib = resolved.pib_nazivnyi || "";
+      if (pibTomSelect && pib) {
+        pibTomSelect.clearOptions();
+        pibTomSelect.addOption({
+          value: pib,
+          label: pib,
+          rank: resolved.zvanie || "",
+          birth_date: resolved.birth_date || "",
+          source: source || "",
+        });
+        pibTomSelect.setValue(pib, true);
+      }
+      if (pibRodovyi) setTomValue(pibRodovyi, resolved.pib_rodovyi || "");
+
+      const birthDateInput = document.getElementById("birth_date");
+      if (birthDateInput) setTomValue(birthDateInput, resolved.birth_date || "");
+
+      const rankSelect = document.getElementById("zvanie");
+      if (rankSelect && resolved.zvanie) {
+        let matched = "";
+        for (const option of rankSelect.options) {
+          if (option.value.toLowerCase() === String(resolved.zvanie).toLowerCase()) {
+            matched = option.value;
+            break;
+          }
         }
-      }, 500);
+        setTomValue(rankSelect, matched || resolved.zvanie);
+      }
+
+      const sluzhbaSelect = document.getElementById("sluzhba_type");
+      if (sluzhbaSelect && resolved.sluzhba_type) {
+        setTomValue(sluzhbaSelect, resolved.sluzhba_type);
+      }
+
+      const fromDb = source === "treatments";
+      setManualSoldierBlockVisible(!fromDb);
+      if (fromDb) {
+        showPibInfoAlert({
+          rank: resolved.zvanie || "",
+          birth_date: resolved.birth_date || "",
+          source: "treatments",
+        });
+      } else {
+        hidePibInfoAlert();
+      }
+    }
+
+    function downloadBase64Docx(base64, filename) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || "document.docx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    showLoading();
+    submitButton.disabled = true;
+    try {
+      const response = await fetch(form.action || window.location.href, {
+        method: "POST",
+        body: new FormData(form),
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          Accept: "application/json",
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || `Помилка генерації (HTTP ${response.status})`);
+      }
+      applyResolvedFields(data.resolved, data.source);
+      const sourceMsg =
+        data.source === "treatments"
+          ? "Дані підставлені з бази Excel і синхронізовані у формі."
+          : "Особа не знайдена в таблиці — у документ і форму пішли введені поля.";
+      showFeedback(
+        "success",
+        "<i class=\"fas fa-check-circle me-1\"></i>" +
+          sourceMsg +
+          " Файл завантажено."
+      );
+      downloadBase64Docx(data.file_base64, data.filename);
+    } catch (err) {
+      console.error(err);
+      showFeedback(
+        "error",
+        "<i class=\"fas fa-exclamation-circle me-1\"></i>" +
+          (err.message || "Не вдалося згенерувати документ")
+      );
+    } finally {
+      hideLoading();
+      submitButton.disabled = false;
     }
   });
 
-  // Ініціалізація валідації при завантаженні сторінки
-  document.addEventListener("DOMContentLoaded", function () {
-    const enlistmentSelect = document.getElementById("enlistment_date");
-    if (enlistmentSelect.value) {
-      toggleCustomDate();
-    }
-    const observationSelect = document.getElementById("observation_end");
-    if (observationSelect.value) {
-      toggleObservationEndCustomDate();
-    }
-  });
+  // Ініціалізація валідації при завантаженні сторінки — у спільному DOMContentLoaded вище
 
   // Функція для перемикання між варіантами дати призову
   function toggleCustomDate() {
     const select = document.getElementById("enlistment_date");
     const customInput = document.getElementById("enlistment_date_custom");
+    const value = getTomValue(select);
 
-    if (select.value === "custom") {
+    if (value === "custom") {
       customInput.style.display = "block";
       customInput.required = true;
       select.setCustomValidity("");
@@ -932,12 +788,9 @@ endblock %} {% block content %}
       customInput.required = false;
       customInput.value = "";
       customInput.setCustomValidity("");
-      if (!select.value) {
+      if (!value) {
         select.setCustomValidity("Оберіть варіант дати призову");
-      } else if (
-        select.value === "з моменту призову" ||
-        select.value === "custom"
-      ) {
+      } else if (value === "з моменту призову") {
         select.setCustomValidity("");
       } else {
         select.setCustomValidity("Оберіть валідний варіант");
@@ -949,8 +802,9 @@ endblock %} {% block content %}
   function toggleObservationEndCustomDate() {
     const select = document.getElementById("observation_end");
     const customInput = document.getElementById("observation_end_custom");
+    const value = getTomValue(select);
 
-    if (select.value === "custom") {
+    if (value === "custom") {
       customInput.style.display = "block";
       customInput.required = true;
       select.setCustomValidity("");
@@ -959,12 +813,9 @@ endblock %} {% block content %}
       customInput.required = false;
       customInput.value = "";
       customInput.setCustomValidity("");
-      if (!select.value) {
+      if (!value) {
         select.setCustomValidity("Оберіть варіант дати");
-      } else if (
-        select.value === "по теперішній час" ||
-        select.value === "custom"
-      ) {
+      } else if (value === "по теперішній час") {
         select.setCustomValidity("");
       } else {
         select.setCustomValidity("Оберіть валідний варіант");

@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% block title %}Бази даних - Медичний пункт батальйону{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-9">
+      <div class="page-header text-center">
+        <h1><i class="fas fa-database me-2"></i>Бази даних</h1>
+        <p class="lead">Статистика та оновлення Excel-файлів у папці <code>data</code></p>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mh-section-title mb-0">
+            <i class="fas fa-file-medical"></i>База лікувань (treatments)
+          </h5>
+        </div>
+        <div class="card-body">
+          <p class="mb-2" id="treatments-stats-text">Завантаження…</p>
+          <p class="small text-muted mb-3" id="treatments-sources-text">
+            Завантаження списку файлів…
+          </p>
+          <hr />
+          <h6 class="mb-3">Оновити файл за рік</h6>
+          <form id="treatments-upload-form">
+            <div class="row g-2 align-items-end">
+              <div class="col-md-3">
+                <label class="form-label" for="treatments-upload-year">Рік</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="treatments-upload-year"
+                  name="year"
+                  min="1990"
+                  max="2100"
+                  required
+                />
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="treatments-upload-file">Файл .xlsx</label>
+                <input
+                  type="file"
+                  class="form-control"
+                  id="treatments-upload-file"
+                  name="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  required
+                />
+              </div>
+              <div class="col-md-3">
+                <button type="submit" class="btn btn-secondary w-100" id="treatments-upload-btn">
+                  <i class="fas fa-save me-1"></i>Замінити
+                </button>
+              </div>
+            </div>
+            <p class="small text-muted mt-2 mb-0">
+              Після перевірки файл <code>treatments_YYYY.xlsx</code> замінюється; кеш оновлюється автоматично.
+            </p>
+            <div id="treatments-upload-alert" class="alert d-none mt-3 mb-0" role="alert"></div>
+          </form>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mh-section-title mb-0">
+            <i class="fas fa-users"></i>Кадрова база (base.xlsx)
+          </h5>
+        </div>
+        <div class="card-body">
+          <p class="mb-3" id="base-stats-text">Завантаження…</p>
+          <hr />
+          <h6 class="mb-3">Оновити base.xlsx</h6>
+          <form id="base-upload-form">
+            <div class="row g-2 align-items-end">
+              <div class="col-md-8">
+                <label class="form-label" for="base-upload-file">Файл .xlsx</label>
+                <input
+                  type="file"
+                  class="form-control"
+                  id="base-upload-file"
+                  name="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  required
+                />
+              </div>
+              <div class="col-md-4">
+                <button type="submit" class="btn btn-secondary w-100" id="base-upload-btn">
+                  <i class="fas fa-save me-1"></i>Замінити base.xlsx
+                </button>
+              </div>
+            </div>
+            <p class="small text-muted mt-2 mb-0">
+              Новий файл перевіряється на відповідність структурі поточного base.xlsx
+              (колонки та ПІБ), після чого повністю замінює його.
+            </p>
+            <div id="base-upload-alert" class="alert d-none mt-3 mb-0" role="alert"></div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
+<link href="{{ url_for('static', filename='css/pib_tom_select.css') }}" rel="stylesheet" />
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script>
+  async function loadTreatmentsStats() {
+    const el = document.getElementById("treatments-stats-text");
+    if (!el) return;
+    try {
+      const response = await fetch("/api/stats");
+      if (!response.ok) throw new Error(String(response.status));
+      const stats = await response.json();
+      if (stats.error) {
+        el.textContent = "Помилка завантаження статистики лікувань.";
+        return;
+      }
+      const when = (stats.last_updated_display || "").split(" ")[0];
+      const parts = [];
+      if (typeof stats.total_records === "number") {
+        parts.push("записів: " + stats.total_records);
+      }
+      if (typeof stats.unique_patients === "number") {
+        parts.push("унікальних ПІБ: " + stats.unique_patients);
+      }
+      if (when) parts.push("останнє оновлення " + when);
+      el.textContent = parts.length ? parts.join(" · ") : "Дата оновлення бази невідома";
+    } catch (e) {
+      console.error(e);
+      el.textContent = "Не вдалося отримати статистику лікувань.";
+    }
+  }
+
+  async function loadTreatmentsSources() {
+    const el = document.getElementById("treatments-sources-text");
+    const yearInput = document.getElementById("treatments-upload-year");
+    if (!el) return;
+    try {
+      const r = await fetch("/api/treatments_sources");
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      const names = (d.year_files || []).map(function (x) {
+        return x.filename;
+      }).join(", ");
+      let line = "";
+      if (names) {
+        line = "Підключені річні файли: " + names;
+        if (d.has_final) line += " + treatments_final.xlsx";
+      } else if (d.has_final) {
+        line =
+          "Лише treatments_final.xlsx (за потреби додайте treatments_YYYY.xlsx у папку data/)";
+      } else {
+        line =
+          "Немає файлів — додайте у data/ файли treatments_YYYY.xlsx або treatments_final.xlsx";
+      }
+      el.textContent = line;
+      if (yearInput && yearInput.dataset.touched !== "1") {
+        if (typeof setTomValue === "function") {
+          setTomValue(yearInput, d.calendar_year);
+        } else {
+          yearInput.value = d.calendar_year;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      el.textContent = "Не вдалося отримати список файлів.";
+    }
+  }
+
+  async function loadBaseInfo() {
+    const el = document.getElementById("base-stats-text");
+    if (!el) return;
+    try {
+      const r = await fetch("/api/base_info");
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      if (!d.exists) {
+        el.textContent =
+          "Файл base.xlsx відсутній — завантажте перший файл (структура з ≥16 колонок і ПІБ у N–P).";
+        return;
+      }
+      const when = (d.updated_display || "").split(" ")[0] || "невідомо";
+      const parts = ["останнє оновлення " + when];
+      if (typeof d.rows === "number") parts.unshift("рядків: " + d.rows);
+      if (typeof d.indexed === "number") parts.splice(1, 0, "в індексі: " + d.indexed);
+      el.textContent = parts.join(" · ");
+    } catch (e) {
+      console.error(e);
+      el.textContent = "Не вдалося отримати інформацію про base.xlsx.";
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    initFormTomSelects("#treatments-upload-form", {
+      skipIds: ["treatments-upload-file"],
+    });
+
+    loadTreatmentsStats();
+    loadTreatmentsSources();
+    loadBaseInfo();
+
+    document
+      .getElementById("treatments-upload-year")
+      ?.addEventListener("input", function () {
+        this.dataset.touched = "1";
+      });
+
+    document
+      .getElementById("treatments-upload-form")
+      ?.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        flushTomInputs(e.target);
+        const btn = document.getElementById("treatments-upload-btn");
+        const alertEl = document.getElementById("treatments-upload-alert");
+        const fd = new FormData(e.target);
+        alertEl.classList.add("d-none");
+        btn.disabled = true;
+        try {
+          const r = await fetch("/api/treatments_upload", {
+            method: "POST",
+            body: fd,
+          });
+          const j = await r.json().catch(function () {
+            return {};
+          });
+          if (!r.ok || !j.ok) {
+            alertEl.textContent = j.error || "Помилка " + r.status;
+            alertEl.className = "alert alert-danger mt-3 mb-0";
+            alertEl.classList.remove("d-none");
+            return;
+          }
+          alertEl.textContent =
+            "Збережено " +
+            j.filename +
+            " (" +
+            j.rows +
+            " рядків). Актуально: " +
+            (j.updated_display || "—") +
+            ".";
+          alertEl.className = "alert alert-success mt-3 mb-0";
+          alertEl.classList.remove("d-none");
+          await loadTreatmentsSources();
+          await loadTreatmentsStats();
+        } catch (err) {
+          console.error(err);
+          alertEl.textContent = "Мережева помилка або сервер недоступний.";
+          alertEl.className = "alert alert-danger mt-3 mb-0";
+          alertEl.classList.remove("d-none");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+    document
+      .getElementById("base-upload-form")
+      ?.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        const btn = document.getElementById("base-upload-btn");
+        const alertEl = document.getElementById("base-upload-alert");
+        const fd = new FormData(e.target);
+        alertEl.classList.add("d-none");
+        btn.disabled = true;
+        try {
+          const r = await fetch("/api/base_upload", { method: "POST", body: fd });
+          const j = await r.json().catch(function () {
+            return {};
+          });
+          if (!r.ok || !j.ok) {
+            alertEl.textContent = j.error || "Помилка " + r.status;
+            alertEl.className = "alert alert-danger mt-3 mb-0";
+            alertEl.classList.remove("d-none");
+            return;
+          }
+          alertEl.textContent =
+            "Збережено base.xlsx (" +
+            j.rows +
+            " рядків, " +
+            (j.indexed || 0) +
+            " у індексі). Актуально: " +
+            (j.updated_display || "");
+          alertEl.className = "alert alert-success mt-3 mb-0";
+          alertEl.classList.remove("d-none");
+          e.target.reset();
+          await loadBaseInfo();
+        } catch (err) {
+          console.error(err);
+          alertEl.textContent = "Мережева помилка або сервер недоступний.";
+          alertEl.className = "alert alert-danger mt-3 mb-0";
+          alertEl.classList.remove("d-none");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+  });
+</script>
+{% endblock %}

@@ -1,7 +1,31 @@
 {
   "tvo_kombrig_zvannya": "полковник",
   "tvo_kombrig_pib": "Євстахій МОСПАН",
-  "tvo_kombat_zvannya": "майор",
-  "tvo_kombat_pib": "Олександр БОВТУН",
-  "updated_at": "2026-04-24T11:16:03"
+  "tvo_kombat_zvannya": "старший лейтенант",
+  "tvo_kombat_pib": "Кирило МЕЛЕШКО",
+  "kombrig_options": [
+    {
+      "zvannya": "полковник",
+      "pib": "Євстахій МОСПАН"
+    }
+  ],
+  "kombat_options": [
+    {
+      "zvannya": "старший лейтенант",
+      "pib": "Кирило МЕЛЕШКО"
+    },
+    {
+      "zvannya": "капітан",
+      "pib": "Максим БОРИСЕНКО"
+    },
+    {
+      "zvannya": "капітан",
+      "pib": "Олександр ПОРТЯНКО"
+    },
+    {
+      "zvannya": "капітан",
+      "pib": "Віталій КОВТУН"
+    }
+  ],
+  "updated_at": "2026-08-08T12:43:55"
 }

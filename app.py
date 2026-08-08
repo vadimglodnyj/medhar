@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import threading
 import json
+import time
 import pandas as pd
 from flask import Flask, render_template, request, send_file, make_response, flash, jsonify
 from werkzeug.utils import secure_filename
@@ -20,6 +21,7 @@ from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
 import io
 import re
+import base64
 import logging
 from datetime import datetime
 
@@ -60,6 +62,12 @@ treatments_last_load_error = None
 SERVICE_SIGNATORIES_FILE = os.path.join(DATA_DIR, "service_signatories.json")
 VLK_SIGNATORIES_FILE = os.path.join(DATA_DIR, "vlk_signatories.json")
 BASE_PERSONNEL_FILE = os.path.join(DATA_DIR, "base.xlsx")
+
+# Кеш base.xlsx: DataFrame + індекс ПІБ → дані (для швидкого автокомпліту)
+base_personnel_cache = None
+base_personnel_index = None
+base_cache_file_signature = None
+_base_load_lock = threading.Lock()
 
 def _excel_cell_str(value, default=""):
     """Текст з комірки Excel/pandas без 'nan' у рядку."""
@@ -115,37 +123,104 @@ def save_service_signatories(data: dict):
     os.replace(tmp_path, SERVICE_SIGNATORIES_FILE)
 
 
+def _normalize_signatory_option(item) -> dict:
+    if not isinstance(item, dict):
+        return {"zvannya": "", "pib": ""}
+    return {
+        "zvannya": _normalize_spaces(item.get("zvannya", "")),
+        "pib": _normalize_spaces(item.get("pib", "")),
+    }
+
+
+def _default_vlk_signatory_options():
+    return {
+        "kombrig_options": [
+            {"zvannya": "полковник", "pib": "Євстахій МОСПАН"},
+        ],
+        "kombat_options": [
+            {"zvannya": "старший лейтенант", "pib": "Кирило МЕЛЕШКО"},
+            {"zvannya": "капітан", "pib": "Максим БОРИСЕНКО"},
+            {"zvannya": "капітан", "pib": "Олександр ПОРТЯНКО"},
+            {"zvannya": "капітан", "pib": "Віталій КОВТУН"},
+        ],
+    }
+
+
+def _dedupe_signatory_options(items):
+    out = []
+    seen = set()
+    for raw in items or []:
+        opt = _normalize_signatory_option(raw)
+        if not opt["zvannya"] or not opt["pib"]:
+            continue
+        key = (opt["zvannya"].lower(), opt["pib"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(opt)
+    return out
+
+
 def load_vlk_signatories():
-    """Повертає збережені поля підписантів для рапорту ВЛК."""
+    """Повертає збережені поля підписантів для рапорту ВЛК + списки опцій."""
     defaults = {
         "tvo_kombrig_zvannya": "",
         "tvo_kombrig_pib": "",
         "tvo_kombat_zvannya": "",
         "tvo_kombat_pib": "",
+        "kombrig_options": [],
+        "kombat_options": [],
     }
+    seeded = _default_vlk_signatory_options()
     try:
         if not os.path.isfile(VLK_SIGNATORIES_FILE):
+            defaults.update(seeded)
+            defaults["tvo_kombrig_zvannya"] = seeded["kombrig_options"][0]["zvannya"]
+            defaults["tvo_kombrig_pib"] = seeded["kombrig_options"][0]["pib"]
+            defaults["tvo_kombat_zvannya"] = seeded["kombat_options"][0]["zvannya"]
+            defaults["tvo_kombat_pib"] = seeded["kombat_options"][0]["pib"]
             return defaults
         with open(VLK_SIGNATORIES_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
         if not isinstance(raw, dict):
+            defaults.update(seeded)
             return defaults
-        for k in defaults.keys():
+        for k in ("tvo_kombrig_zvannya", "tvo_kombrig_pib", "tvo_kombat_zvannya", "tvo_kombat_pib"):
             defaults[k] = _normalize_spaces(raw.get(k, ""))
+        defaults["kombrig_options"] = _dedupe_signatory_options(
+            raw.get("kombrig_options") or seeded["kombrig_options"]
+        )
+        defaults["kombat_options"] = _dedupe_signatory_options(
+            raw.get("kombat_options") or seeded["kombat_options"]
+        )
+        if not defaults["kombrig_options"]:
+            defaults["kombrig_options"] = list(seeded["kombrig_options"])
+        if not defaults["kombat_options"]:
+            defaults["kombat_options"] = list(seeded["kombat_options"])
         return defaults
     except Exception as e:
         logger.warning("Не вдалося зчитати vlk_signatories.json: %s", e)
+        defaults.update(seeded)
         return defaults
 
 
 def save_vlk_signatories(data: dict):
-    """Зберігає поля підписантів ВЛК (атомарний запис)."""
+    """Зберігає поля підписантів ВЛК та списки опцій (атомарний запис)."""
     os.makedirs(DATA_DIR, exist_ok=True)
+    current = load_vlk_signatories()
+    kombrig_options = data.get("kombrig_options")
+    kombat_options = data.get("kombat_options")
+    if kombrig_options is None:
+        kombrig_options = current.get("kombrig_options", [])
+    if kombat_options is None:
+        kombat_options = current.get("kombat_options", [])
     payload = {
         "tvo_kombrig_zvannya": _normalize_spaces(data.get("tvo_kombrig_zvannya", "")),
         "tvo_kombrig_pib": _normalize_spaces(data.get("tvo_kombrig_pib", "")),
         "tvo_kombat_zvannya": _normalize_spaces(data.get("tvo_kombat_zvannya", "")),
         "tvo_kombat_pib": _normalize_spaces(data.get("tvo_kombat_pib", "")),
+        "kombrig_options": _dedupe_signatory_options(kombrig_options),
+        "kombat_options": _dedupe_signatory_options(kombat_options),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
     tmp_path = VLK_SIGNATORIES_FILE + ".tmp"
@@ -449,6 +524,21 @@ def _normalize_spaces(text: str) -> str:
     return re.sub(r'\s+', ' ', (text or '')).strip()
 
 
+def _loader_preview_delay():
+    """Пауза перед віддачею файлу (для перевірки лоадера)."""
+    delay = float(LOADER_PREVIEW_DELAY_SEC or 0)
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _safe_download_stem(text: str, fallback: str = "document") -> str:
+    """Ім'я файлу для download: лишає кирилицю, прибирає небезпечні символи."""
+    cleaned = _normalize_spaces(text).replace(" ", "_")
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", cleaned)
+    cleaned = cleaned.strip(" ._")
+    return cleaned or fallback
+
+
 def _ensure_final_period(text: str) -> str:
     t = _normalize_spaces(text).rstrip()
     if not t:
@@ -487,6 +577,44 @@ def _format_komisariat_and_date(raw_value: str) -> str:
         return ""
     before = before.rstrip(' ,.;:')
     return f"{before}, {date_value} року."
+
+
+def _format_komisariat_parts(komisariat: str, data_pryzovu: str) -> str:
+    """Збирає рядок комісаріату з окремих полів форми."""
+    komisariat = _normalize_spaces(komisariat).rstrip(' ,.;:')
+    data_pryzovu = _normalize_spaces(data_pryzovu)
+    if not komisariat or not data_pryzovu:
+        return ""
+    if not validate_date_format(data_pryzovu):
+        return ""
+    return f"{komisariat}, {data_pryzovu} року."
+
+
+def _format_osvita_parts(
+    osvita_type: str,
+    navchalnyy_zaklad: str,
+    misto: str,
+    rik: str,
+) -> str:
+    """
+    Збирає рядок освіти для шаблону, напр.:
+    «середня, ЗОШ №276 м. Баку, у 1996 році.»
+    """
+    osvita_type = _normalize_spaces(osvita_type).lower()
+    zaklad = _normalize_spaces(navchalnyy_zaklad)
+    misto = _normalize_spaces(misto)
+    rik = _normalize_spaces(rik)
+    if not osvita_type or not zaklad or not misto or not rik:
+        return ""
+    if not re.fullmatch(r'\d{4}', rik):
+        return ""
+    year_now = datetime.now().year
+    year_int = int(rik)
+    if year_int < 1950 or year_int > year_now:
+        return ""
+    misto_part = misto if misto.lower().startswith("м.") or misto.lower().startswith("м ") else f"м. {misto}"
+    line = f"{osvita_type}, {zaklad} {misto_part}, у {rik} році"
+    return _ensure_final_period(_title_first_letter(line))
 
 
 def _split_pib(full_name: str):
@@ -528,9 +656,9 @@ def _surname_to_dative(surname_nominative: str) -> str:
     if s.endswith("ій"):
         return _surname_first_capital(s[:-2] + "ьому")
 
-    # Ковальчук -> Ковальчуку, Шевченко -> Шевченку, Іванов -> Іванову
+    # Ковальчук -> Ковальчуку, Шевченко -> Шевченку, Мелешко -> Мелешку, Іванов -> Іванову
     if s.endswith("ко"):
-        return _surname_first_capital(s + "у")
+        return _surname_first_capital(s[:-1] + "у")
     if s.endswith(("ов", "ев", "єв", "ин", "ін", "їн", "ук", "юк", "чук", "чак", "ак", "як", "ич", "ець", "єць", "ань", "ень")):
         return _surname_first_capital(s + "у")
 
@@ -768,56 +896,198 @@ def _extract_position_from_base_row(row) -> str:
 
 
 def _extract_rank_from_base_row(row) -> str:
-    """Звання з base.xlsx (пріоритет: колонка L, далі M)."""
+    """Звання з base.xlsx: колонка M (фактичне), запасний варіант — L (по штату)."""
     try:
         rank_l = _excel_cell_str(row.iloc[11])
         rank_m = _excel_cell_str(row.iloc[12])
     except Exception:
         return ""
-    return rank_l or rank_m
+    return rank_m or rank_l
 
 
-def _lookup_person_in_base_excel(pib_nazivnyi: str) -> dict:
-    """
-    Пошук персональних даних за ПІБ у data/base.xlsx.
-    Повертає словник: zvanie, zaimana_posada, prizvyshche, imya, po_batkovi.
-    """
-    empty = {
+def _empty_base_person() -> dict:
+    return {
         "zvanie": "",
         "zaimana_posada": "",
         "prizvyshche": "",
         "imya": "",
         "po_batkovi": "",
     }
-    if not pib_nazivnyi or not os.path.isfile(BASE_PERSONNEL_FILE):
-        return empty
+
+
+def _base_excel_file_signature():
+    """mtime + size base.xlsx для інвалідації кешу."""
+    if not os.path.isfile(BASE_PERSONNEL_FILE):
+        return None
     try:
-        base_df = pd.read_excel(BASE_PERSONNEL_FILE)
-    except Exception as e:
-        logger.warning("Не вдалося прочитати base.xlsx: %s", e)
-        return empty
+        st = os.stat(BASE_PERSONNEL_FILE)
+        return (BASE_PERSONNEL_FILE, st.st_mtime, st.st_size)
+    except OSError:
+        return None
 
-    if len(base_df.columns) < 16:
-        return empty
 
-    target_clean = re.sub(r'\s+', ' ', pib_nazivnyi).strip().lower()
-    if not target_clean:
-        return empty
+def _format_mtime_display(path):
+    """Дата/час модифікації файлу у форматі дд.мм.рррр гг:хх."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%d.%m.%Y %H:%M")
+    except OSError:
+        return None
 
+
+def _mtime_iso(path):
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds")
+    except OSError:
+        return None
+
+
+def _invalidate_base_cache_unlocked():
+    """Скинути кеш base.xlsx після заміни файлу (викликати під _base_load_lock)."""
+    global base_personnel_cache, base_personnel_index, base_cache_file_signature
+    base_personnel_cache = None
+    base_personnel_index = None
+    base_cache_file_signature = None
+
+
+def _validate_base_upload_dataframe(df, reference_df=None):
+    """
+    Перевірка структури нового base.xlsx перед заміною.
+    Якщо є поточний файл — кількість і назви колонок мають збігатися.
+    """
+    if df is None or len(df) < 1:
+        return False, "Файл порожній або не містить рядків даних"
+    if len(df.columns) < 16:
+        return (
+            False,
+            "У файлі має бути щонайменше 16 колонок (A–P), як у поточному base.xlsx",
+        )
+
+    new_cols = [str(c).strip() for c in df.columns]
+    if reference_df is not None and len(reference_df.columns) > 0:
+        ref_cols = [str(c).strip() for c in reference_df.columns]
+        if len(new_cols) != len(ref_cols):
+            return (
+                False,
+                f"Кількість колонок не збігається з поточним base.xlsx "
+                f"(було {len(ref_cols)}, у новому файлі {len(new_cols)})",
+            )
+        if new_cols != ref_cols:
+            mismatches = [
+                f"«{a}» → «{b}»"
+                for a, b in zip(ref_cols, new_cols)
+                if a != b
+            ][:5]
+            detail = "; ".join(mismatches) if mismatches else "відмінність у назвах"
+            return (
+                False,
+                "Назви колонок не збігаються з поточним base.xlsx. "
+                f"Перші відмінності: {detail}",
+            )
+
+    index = _build_base_personnel_index(df)
+    if len(index) < 1:
+        return (
+            False,
+            "Не знайдено жодного ПІБ у колонках N–P (прізвище, ім'я, по батькові). "
+            "Перевірте, що структура файлу така сама, як у попереднього base.xlsx",
+        )
+    return True, None
+
+
+def _build_base_personnel_index(base_df) -> dict:
+    """Побудова dict[ПІБ_чисте] → дані персони з рядка base.xlsx."""
+    index = {}
+    if base_df is None or len(base_df.columns) < 16:
+        return index
     for _, row in base_df.iterrows():
         sur = _excel_cell_str(row.iloc[13])
         first = _excel_cell_str(row.iloc[14])
         pat = _excel_cell_str(row.iloc[15])
         row_pib = _normalize_spaces(f"{sur} {first} {pat}").lower()
-        if row_pib and row_pib == target_clean:
-            return {
-                "zvanie": _extract_rank_from_base_row(row),
-                "zaimana_posada": _extract_position_from_base_row(row),
-                "prizvyshche": sur,
-                "imya": first,
-                "po_batkovi": pat,
-            }
-    return empty
+        if not row_pib:
+            continue
+        index[row_pib] = {
+            "zvanie": _extract_rank_from_base_row(row),
+            "zaimana_posada": _extract_position_from_base_row(row),
+            "prizvyshche": sur,
+            "imya": first,
+            "po_batkovi": pat,
+        }
+    return index
+
+
+def load_base_personnel_data():
+    """
+    Завантажує base.xlsx у пам'ять і будує індекс за ПІБ.
+    Перечитує файл лише коли змінилась signature (mtime/size).
+    """
+    global base_personnel_cache, base_personnel_index, base_cache_file_signature
+
+    sig = _base_excel_file_signature()
+    if (
+        base_personnel_index is not None
+        and base_personnel_cache is not None
+        and base_cache_file_signature == sig
+        and sig is not None
+    ):
+        return base_personnel_cache
+
+    with _base_load_lock:
+        sig = _base_excel_file_signature()
+        if (
+            base_personnel_index is not None
+            and base_personnel_cache is not None
+            and base_cache_file_signature == sig
+            and sig is not None
+        ):
+            return base_personnel_cache
+
+        if sig is None:
+            base_personnel_cache = None
+            base_personnel_index = {}
+            base_cache_file_signature = None
+            return None
+
+        try:
+            base_df = pd.read_excel(BASE_PERSONNEL_FILE)
+        except Exception as e:
+            logger.warning("Не вдалося прочитати base.xlsx: %s", e)
+            base_personnel_cache = None
+            base_personnel_index = {}
+            base_cache_file_signature = None
+            return None
+
+        index = _build_base_personnel_index(base_df)
+        base_personnel_cache = base_df
+        base_personnel_index = index
+        base_cache_file_signature = sig
+        logger.info("Кеш base.xlsx оновлено: %s записів у індексі", len(index))
+        return base_personnel_cache
+
+
+def load_base_personnel_index() -> dict:
+    """Повертає індекс ПІБ → дані з base.xlsx (з кешем)."""
+    load_base_personnel_data()
+    return base_personnel_index if base_personnel_index is not None else {}
+
+
+def _lookup_person_in_base_excel(pib_nazivnyi: str) -> dict:
+    """
+    Пошук персональних даних за ПІБ у data/base.xlsx (через кешований індекс).
+    Повертає словник: zvanie, zaimana_posada, prizvyshche, imya, po_batkovi.
+    """
+    empty = _empty_base_person()
+    if not pib_nazivnyi:
+        return empty
+    target_clean = re.sub(r'\s+', ' ', pib_nazivnyi).strip().lower()
+    if not target_clean:
+        return empty
+    person = load_base_personnel_index().get(target_clean)
+    return dict(person) if person else empty
 
 
 def _lookup_position_in_base_excel(pib_nazivnyi: str) -> str:
@@ -1099,6 +1369,8 @@ def treatments_ready():
 def treatments_sources():
     """Список підключених файлів treatments_YYYY.xlsx (без повних шляхів на диску)."""
     items = []
+    latest_mtime = None
+    latest_path = None
     for year, path in list_treatments_year_files_sorted():
         try:
             mtime = os.path.getmtime(path)
@@ -1108,7 +1380,20 @@ def treatments_sources():
             'year': year,
             'filename': os.path.basename(path),
             'mtime': mtime,
+            'updated_at': _mtime_iso(path),
+            'updated_display': _format_mtime_display(path),
         })
+        if mtime is not None and (latest_mtime is None or mtime > latest_mtime):
+            latest_mtime = mtime
+            latest_path = path
+    if os.path.isfile(TREATMENTS_FINAL_FILE):
+        try:
+            final_mtime = os.path.getmtime(TREATMENTS_FINAL_FILE)
+        except OSError:
+            final_mtime = None
+        if final_mtime is not None and (latest_mtime is None or final_mtime > latest_mtime):
+            latest_mtime = final_mtime
+            latest_path = TREATMENTS_FINAL_FILE
     cy = datetime.now().year
     dest = treatments_path_for_year(cy)
     return jsonify({
@@ -1118,6 +1403,9 @@ def treatments_sources():
         'current_year_target': cy,
         'current_year_filename': os.path.basename(dest),
         'current_year_exists': os.path.isfile(dest),
+        'last_updated_at': _mtime_iso(latest_path) if latest_path else None,
+        'last_updated_display': _format_mtime_display(latest_path) if latest_path else None,
+        'last_updated_filename': os.path.basename(latest_path) if latest_path else None,
     })
 
 
@@ -1182,6 +1470,110 @@ def treatments_upload():
             'year': year,
             'filename': os.path.basename(dest),
             'rows': int(len(df)),
+            'updated_at': _mtime_iso(dest),
+            'updated_display': _format_mtime_display(dest),
+        })
+    finally:
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+@app.route('/api/base_info', methods=['GET'])
+def base_info():
+    """Актуальність кадрової бази data/base.xlsx."""
+    exists = os.path.isfile(BASE_PERSONNEL_FILE)
+    rows = 0
+    indexed = 0
+    if exists:
+        try:
+            df = load_base_personnel_data()
+            if df is not None:
+                rows = int(len(df))
+            indexed = len(load_base_personnel_index())
+        except Exception as e:
+            logger.warning("base_info: не вдалося прочитати base.xlsx: %s", e)
+    return jsonify({
+        'ok': True,
+        'exists': exists,
+        'filename': 'base.xlsx',
+        'rows': rows,
+        'indexed': indexed,
+        'updated_at': _mtime_iso(BASE_PERSONNEL_FILE) if exists else None,
+        'updated_display': _format_mtime_display(BASE_PERSONNEL_FILE) if exists else None,
+    })
+
+
+@app.route('/api/base_upload', methods=['POST'])
+def base_upload():
+    """
+    Заміна data/base.xlsx: валідація структури відносно поточного файлу,
+    атомарний запис, скидання кешу. Без створення base_1/base_2 тощо.
+    """
+    if 'file' not in request.files:
+        return jsonify({'ok': False, 'error': 'Файл не передано (поле file)'}), 400
+    up = request.files['file']
+    if not up or not up.filename:
+        return jsonify({'ok': False, 'error': 'Оберіть файл .xlsx'}), 400
+    if not up.filename.lower().endswith('.xlsx'):
+        return jsonify({'ok': False, 'error': 'Допускається лише розширення .xlsx'}), 400
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix='.xlsx', dir=TEMP_DIR)
+        os.close(fd)
+        up.save(tmp_path)
+        size = os.path.getsize(tmp_path)
+        if size > BASE_UPLOAD_MAX_BYTES:
+            return (
+                jsonify({
+                    'ok': False,
+                    'error': f'Файл завеликий (макс. {BASE_UPLOAD_MAX_BYTES // (1024 * 1024)} МБ)',
+                }),
+                413,
+            )
+        try:
+            df = pd.read_excel(tmp_path)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': f'Не вдалося прочитати Excel: {e}'}), 400
+
+        reference_df = None
+        if os.path.isfile(BASE_PERSONNEL_FILE):
+            try:
+                reference_df = pd.read_excel(BASE_PERSONNEL_FILE)
+            except Exception as e:
+                logger.warning("Не вдалося прочитати поточний base.xlsx для порівняння: %s", e)
+                reference_df = None
+
+        ok, err_msg = _validate_base_upload_dataframe(df, reference_df)
+        if not ok:
+            return jsonify({'ok': False, 'error': err_msg}), 400
+
+        staging = os.path.join(DATA_DIR, '.base.upload.tmp.xlsx')
+        with _base_load_lock:
+            shutil.copyfile(tmp_path, staging)
+            os.replace(staging, BASE_PERSONNEL_FILE)
+            _invalidate_base_cache_unlocked()
+        # Прогріти кеш одразу після заміни
+        load_base_personnel_data()
+        indexed = len(load_base_personnel_index())
+        logger.info(
+            "Оновлено base.xlsx з файлу %s (%s рядків, %s у індексі)",
+            secure_filename(up.filename),
+            len(df),
+            indexed,
+        )
+        return jsonify({
+            'ok': True,
+            'filename': 'base.xlsx',
+            'rows': int(len(df)),
+            'indexed': indexed,
+            'updated_at': _mtime_iso(BASE_PERSONNEL_FILE),
+            'updated_display': _format_mtime_display(BASE_PERSONNEL_FILE),
         })
     finally:
         if tmp_path and os.path.isfile(tmp_path):
@@ -1196,9 +1588,29 @@ def get_stats():
     """API endpoint для отримання статистики бази даних"""
     try:
         treatments_df = load_treatments_data()
+        latest_path = None
+        latest_mtime = None
+        for _, path in list_treatments_year_files_sorted():
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if latest_mtime is None or mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_path = path
+        if os.path.isfile(TREATMENTS_FINAL_FILE):
+            try:
+                final_mtime = os.path.getmtime(TREATMENTS_FINAL_FILE)
+            except OSError:
+                final_mtime = None
+            if final_mtime is not None and (latest_mtime is None or final_mtime > latest_mtime):
+                latest_path = TREATMENTS_FINAL_FILE
         stats = {
             "total_records": int(len(treatments_df)),
             "unique_patients": int(treatments_df["ПІБ_чисте"].nunique()) if "ПІБ_чисте" in treatments_df.columns else 0,
+            "last_updated_at": _mtime_iso(latest_path) if latest_path else None,
+            "last_updated_display": _format_mtime_display(latest_path) if latest_path else None,
+            "last_updated_filename": os.path.basename(latest_path) if latest_path else None,
         }
         return jsonify(stats)
         
@@ -1254,6 +1666,47 @@ def api_vlk_signatories():
         return jsonify(load_vlk_signatories())
 
     data = request.get_json(silent=True) or {}
+    action = _normalize_spaces(data.get("action", "save_selection")).lower() or "save_selection"
+    current = load_vlk_signatories()
+
+    if action == "add_option":
+        role = _normalize_spaces(data.get("role", "")).lower()
+        zvannya = _normalize_spaces(data.get("zvannya", ""))
+        pib = _normalize_spaces(data.get("pib", ""))
+        if role not in ("kombrig", "kombat"):
+            return jsonify({"ok": False, "error": "Невідома роль підписанта"}), 400
+        if not zvannya or not pib:
+            return jsonify({"ok": False, "error": "Вкажіть звання та ПІБ"}), 400
+        # Прізвище великими для узгодженості з документами
+        parts = pib.split(" ")
+        if len(parts) >= 2:
+            parts[-1] = parts[-1].upper()
+            pib = _normalize_spaces(" ".join(parts))
+        key = "kombrig_options" if role == "kombrig" else "kombat_options"
+        options = list(current.get(key) or [])
+        options.append({"zvannya": zvannya, "pib": pib})
+        payload = {
+            "tvo_kombrig_zvannya": current.get("tvo_kombrig_zvannya", ""),
+            "tvo_kombrig_pib": current.get("tvo_kombrig_pib", ""),
+            "tvo_kombat_zvannya": current.get("tvo_kombat_zvannya", ""),
+            "tvo_kombat_pib": current.get("tvo_kombat_pib", ""),
+            "kombrig_options": current.get("kombrig_options", []),
+            "kombat_options": current.get("kombat_options", []),
+        }
+        payload[key] = options
+        if role == "kombrig":
+            payload["tvo_kombrig_zvannya"] = zvannya
+            payload["tvo_kombrig_pib"] = pib
+        else:
+            payload["tvo_kombat_zvannya"] = zvannya
+            payload["tvo_kombat_pib"] = pib
+        try:
+            save_vlk_signatories(payload)
+            return jsonify({"ok": True, **load_vlk_signatories()})
+        except Exception as e:
+            logger.error("Помилка додавання підписанта ВЛК: %s", e)
+            return jsonify({"ok": False, "error": str(e)}), 500
+
     required = (
         "tvo_kombrig_zvannya",
         "tvo_kombrig_pib",
@@ -1266,12 +1719,58 @@ def api_vlk_signatories():
             'ok': False,
             'error': "Заповніть усі поля підписантів перед збереженням",
         }), 400
+    payload["kombrig_options"] = current.get("kombrig_options", [])
+    payload["kombat_options"] = current.get("kombat_options", [])
     try:
         save_vlk_signatories(payload)
-        return jsonify({'ok': True, **payload})
+        return jsonify({'ok': True, **load_vlk_signatories()})
     except Exception as e:
         logger.error("Помилка збереження VLK-підписантів: %s", e)
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/lpz_list', methods=['GET'])
+def api_lpz_list():
+    """Список ЛПЗ для автокомпліту рапортів."""
+    path = os.path.join(DATA_DIR, "lpz_list.json")
+    try:
+        if not os.path.isfile(path):
+            return jsonify([])
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return jsonify([])
+        items = []
+        for x in data:
+            s = _normalize_spaces(str(x)) if x is not None else ""
+            if s:
+                items.append(s)
+        return jsonify(items)
+    except Exception as e:
+        logger.warning("Не вдалося зчитати lpz_list.json: %s", e)
+        return jsonify([])
+
+
+@app.route('/api/likar_specializations', methods=['GET'])
+def api_likar_specializations():
+    """Список спеціалізацій лікаря (родовий відмінок) для рапортів."""
+    path = os.path.join(DATA_DIR, "likar_specializations.json")
+    try:
+        if not os.path.isfile(path):
+            return jsonify([])
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return jsonify([])
+        items = []
+        for x in data:
+            s = _normalize_spaces(str(x)) if x is not None else ""
+            if s:
+                items.append(s)
+        return jsonify(items)
+    except Exception as e:
+        logger.warning("Не вдалося зчитати likar_specializations.json: %s", e)
+        return jsonify([])
 
 
 @app.route('/api/search_pib', methods=['GET'])
@@ -1283,16 +1782,55 @@ def search_pib():
         if len(query) < 2:
             return jsonify({'results': []})
 
+        q_clean = re.sub(r"\s+", " ", query).strip().lower()
+        if not q_clean:
+            return jsonify({'results': []})
+
+        # Рапорти / службова характеристика — лише base.xlsx (кешований індекс).
+        if context_mode == "service":
+            index = load_base_personnel_index()
+            prefix_hits = []
+            contains_hits = []
+            for pib_clean, person in index.items():
+                if not pib_clean:
+                    continue
+                if pib_clean.startswith(q_clean):
+                    prefix_hits.append(person)
+                elif q_clean in pib_clean:
+                    contains_hits.append(person)
+            matched_people = (prefix_hits + contains_hits)[:10]
+            results = []
+            for person in matched_people:
+                sur = person.get("prizvyshche", "")
+                first = person.get("imya", "")
+                pat = person.get("po_batkovi", "")
+                full_name = _normalize_spaces(f"{sur} {first} {pat}")
+                if not full_name:
+                    continue
+                rank = person.get("zvanie", "")
+                position = person.get("zaimana_posada", "")
+                label = f"{full_name} ({rank})" if rank else full_name
+                results.append({
+                    "label": label,
+                    "value": full_name,
+                    "rank": rank,
+                    "position": position,
+                    "prizvyshche": sur,
+                    "imya": first,
+                    "po_batkovi": pat,
+                    "birth_date": "",
+                })
+            return jsonify({'results': results})
+
+        # Медична характеристика — пошук у treatments.
         treatments_df = load_treatments_data()
         if "ПІБ_чисте" not in treatments_df.columns or "ПІБ" not in treatments_df.columns:
             return jsonify({'results': []})
 
-        q_clean = re.sub(r"\s+", " ", query).strip().lower()
         matched = treatments_df[treatments_df["ПІБ_чисте"].str.contains(q_clean, na=False)]
         if matched.empty:
             return jsonify({'results': []})
 
-        # Беремо по одному запису на кожного пацієнта для автокомпліту
         unique_patients = matched.drop_duplicates(subset=["ПІБ_чисте"], keep="first").head(10)
         results = []
         for _, row in unique_patients.iterrows():
@@ -1307,15 +1845,6 @@ def search_pib():
             pat = _excel_cell_str(row.get("По батькові"))
             if not (sur and first and pat):
                 sur, first, pat = _split_pib(full_name)
-
-            # Для службової характеристики підтягуємо ті ж пріоритети, що і під час генерації.
-            if context_mode == "service":
-                base_person = _lookup_person_in_base_excel(full_name)
-                rank = base_person.get("zvanie") or rank
-                position = base_person.get("zaimana_posada") or position
-                sur = base_person.get("prizvyshche") or sur
-                first = base_person.get("imya") or first
-                pat = base_person.get("po_batkovi") or pat
 
             birth_date_str = ""
             try:
@@ -1337,10 +1866,11 @@ def search_pib():
                 "imya": first,
                 "po_batkovi": pat,
                 "birth_date": birth_date_str,
+                "source": "treatments",
             })
 
         return jsonify({'results': results})
-        
+
     except Exception as e:
         logger.error(f"Помилка при пошуку ПІБ: {e}")
         return jsonify({'results': [], 'error': str(e)})
@@ -1361,9 +1891,29 @@ def index():
     """Вітальна сторінка з інструкцією щодо data/ та встановлення."""
     return render_template('welcome.html', **_welcome_template_context())
 
+
+@app.route('/databases', methods=['GET'])
+def databases():
+    """Статистика та оновлення Excel-баз (treatments / base)."""
+    return render_template('databases.html')
+
+
 @app.route('/medical-characteristic', methods=['GET', 'POST'])
 def medical_characteristic():
     """Генерація медичної характеристики"""
+    def _wants_ajax():
+        accept = (request.headers.get("Accept") or "").lower()
+        return (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in accept
+        )
+
+    def _ajax_error(message: str, status: int = 400):
+        if _wants_ajax():
+            return jsonify({"ok": False, "error": message}), status
+        flash(message, "error")
+        return render_template('medical_characteristic.html')
+
     if request.method == 'POST':
         pib_nazivnyi = request.form.get('pib_nazivnyi', '').strip()
         pib_rodovyi_input = request.form.get('pib_rodovyi', '').strip()
@@ -1374,15 +1924,13 @@ def medical_characteristic():
         observation_end_custom = request.form.get('observation_end_custom', '').strip()
         signatory = request.form.get('signatory', '').strip()
         birth_date = request.form.get('birth_date', '').strip()
-        
+
         # Обробка дати призову
         if enlistment_date == "custom":
             if not enlistment_date_custom:
-                flash("Вкажіть конкретну дату зарахування", "error")
-                return render_template('medical_characteristic.html')
+                return _ajax_error("Вкажіть конкретну дату зарахування")
             if not validate_date_format(enlistment_date_custom):
-                flash("Невірний формат дати зарахування. Використовуйте формат дд.мм.рррр", "error")
-                return render_template('medical_characteristic.html')
+                return _ajax_error("Невірний формат дати зарахування. Використовуйте формат дд.мм.рррр")
             final_enlistment_date = f"з {enlistment_date_custom} року"
         elif enlistment_date == "з моменту призову":
             final_enlistment_date = "з моменту призову"
@@ -1393,11 +1941,9 @@ def medical_characteristic():
         # Обробка дати завершення нагляду
         if observation_end == "custom":
             if not observation_end_custom:
-                flash("Вкажіть конкретну дату завершення нагляду", "error")
-                return render_template('medical_characteristic.html')
+                return _ajax_error("Вкажіть конкретну дату завершення нагляду")
             if not validate_date_format(observation_end_custom):
-                flash("Невірний формат дати завершення нагляду. Використовуйте формат дд.мм.рррр", "error")
-                return render_template('medical_characteristic.html')
+                return _ajax_error("Невірний формат дати завершення нагляду. Використовуйте формат дд.мм.рррр")
             final_observation_end = f"по {observation_end_custom} року"
         elif observation_end == "по теперішній час":
             final_observation_end = "по теперішній час"
@@ -1425,34 +1971,31 @@ def medical_characteristic():
             signatory_department = None
             signatory_rank = None
             signatory_name = None
-        
+
         # Валідація обов'язкових полів
         if not pib_nazivnyi:
-            flash("ПІБ (в називному відмінку) є обов'язковим полем", "error")
-            return render_template('medical_characteristic.html')
+            return _ajax_error("ПІБ (в називному відмінку) є обов'язковим полем")
         if not final_enlistment_date:
-            flash("Дата зарахування є обов'язковим полем", "error")
-            return render_template('medical_characteristic.html')
+            return _ajax_error("Дата зарахування є обов'язковим полем")
         if not signatory:
-            flash("Оберіть підписанта", "error")
-            return render_template('medical_characteristic.html')
+            return _ajax_error("Оберіть підписанта")
         if birth_date and not validate_date_format(birth_date):
-            flash("Невірний формат дати народження. Використовуйте формат дд.мм.рррр", "error")
-            return render_template('medical_characteristic.html')
-        
+            return _ajax_error("Невірний формат дати народження. Використовуйте формат дд.мм.рррр")
+
         try:
             treatments_df = load_treatments_data()
         except Exception as e:
             logger.error(f"Помилка при завантаженні даних: {e}")
-            flash(f"Помилка при завантаженні даних: {e}", "error")
-            return render_template('medical_characteristic.html')
-        
+            return _ajax_error(f"Помилка при завантаженні даних: {e}", 500)
+
         pib_nazivnyi_clean = re.sub(r'\s+', ' ', pib_nazivnyi).strip().lower()
         soldier_records = treatments_df[treatments_df['ПІБ_чисте'] == pib_nazivnyi_clean]
 
         context = {}
+        data_source = "manual"
 
         if not soldier_records.empty:
+            data_source = "treatments"
             first_record = soldier_records.iloc[0]
             kategoriia = first_record['Категорія']
             birth_date_obj = first_record['Дата народження']
@@ -1474,7 +2017,7 @@ def medical_characteristic():
                 'birth_date': request.form.get('birth_date'),
                 'treatment_history': ["\t" + "За час проходження військової служби не знаходився на стаціонарному або амбулаторному лікуванні у закладах Міністерства охорони здоров'я України та медичних територіальних об'єднань Міністерства внутрішніх справ України."],
             }
-        
+
         pib_nazivnyi_display = format_nominative_pib_display(pib_nazivnyi)
         context['pib_nazivnyi'] = pib_nazivnyi_display
         context['pib_rodovyi'] = build_pib_rodovyi_for_document(
@@ -1485,20 +2028,21 @@ def medical_characteristic():
         context['signatory_position'] = signatory_position
         context['signatory_rank'] = signatory_rank
         context['signatory_name'] = signatory_name
-        
+
         # Додаємо signatory_department тільки якщо воно не None (тобто не для Мажаєва)
         if signatory_department is not None:
             context['signatory_department'] = signatory_department
             context['signatory_department_with_break'] = signatory_department + "\n"
         else:
             context['signatory_department_with_break'] = ""
-        
+
         # Створюємо поле для звання та імені з табуляцією для вирівнювання по краях
         context['signatory_rank_and_name'] = f"{signatory_rank}\t\t\t\t\t{signatory_name}"
-        
+
         # Додаємо звання в родовому відмінку для шапки
         context['zvanie_genitive'] = format_rank_genitive(context.get('zvanie', ''))
-        
+        context['data_stvorennya'] = datetime.now().strftime("%d.%m.%Y")
+
         # Вибір шаблону залежно від підписанта
         if signatory == "company_commander":
             # Використовуємо окремий шаблон для Мажаєва
@@ -1506,7 +2050,7 @@ def medical_characteristic():
         else:
             # Стандартний шаблон для Гончарової та Юрчак
             template_path = MEDICAL_CHARACTERISTIC_TEMPLATE
-        
+
         # Рендеримо DOCX із маркерами розділення абзаців для історії лікування
         doc = DocxTemplate(template_path)
         # Готуємо плейсхолдер з маркером для безпечної пост-обробки
@@ -1561,23 +2105,59 @@ def medical_characteristic():
         file_stream = io.BytesIO()
         rendered.save(file_stream)
         file_stream.seek(0)
+        file_bytes = file_stream.getvalue()
+        download_name = f'Медична_характеристика_{pib_nazivnyi_display.replace(" ", "_")}.docx'
+
+        _loader_preview_delay()
+
+        if _wants_ajax():
+            form_birth = context.get("birth_date") or ""
+            if form_birth == "[дата не вказана]":
+                form_birth = ""
+            return jsonify({
+                "ok": True,
+                "source": data_source,
+                "resolved": {
+                    "pib_nazivnyi": context.get("pib_nazivnyi") or "",
+                    "pib_rodovyi": context.get("pib_rodovyi") or "",
+                    "zvanie": context.get("zvanie") or "",
+                    "sluzhba_type": context.get("sluzhba_type") or "",
+                    "birth_date": form_birth,
+                },
+                "filename": download_name,
+                "file_base64": base64.b64encode(file_bytes).decode("ascii"),
+            })
 
         response = make_response(send_file(
-            file_stream, as_attachment=True,
-            download_name=f'Медична_характеристика_{pib_nazivnyi_display.replace(" ", "_")}.docx',
+            io.BytesIO(file_bytes), as_attachment=True,
+            download_name=download_name,
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         ))
         response.set_cookie('fileDownload', 'true', max_age=20)
-        
+
         return response
 
     return render_template('medical_characteristic.html')
 
 
+def _service_signatory_template_defaults():
+    """Підписанти службової: вибір з тих самих списків, що й для рапортів."""
+    service = load_service_signatories()
+    vlk = load_vlk_signatories()
+    return {
+        "pidpysant_1_zvannya": service.get("pidpysant_1_zvannya") or vlk.get("tvo_kombrig_zvannya", ""),
+        "pidpysant_1_pib": service.get("pidpysant_1_pib") or vlk.get("tvo_kombrig_pib", ""),
+        "pidpysant_2_zvannya": service.get("pidpysant_2_zvannya") or vlk.get("tvo_kombat_zvannya", ""),
+        "pidpysant_2_pib": service.get("pidpysant_2_pib") or vlk.get("tvo_kombat_pib", ""),
+        "kombrig_options": vlk.get("kombrig_options", []),
+        "kombat_options": vlk.get("kombat_options", []),
+    }
+
+
 @app.route('/service-characteristic', methods=['GET', 'POST'])
 def service_characteristic():
     """Генерація службової характеристики."""
-    signatory_defaults = load_service_signatories()
+    signatory_defaults = _service_signatory_template_defaults()
     if request.method == 'POST':
         pib_nazivnyi = _normalize_spaces(request.form.get('pib_nazivnyi', ''))
         zvanie_input = _normalize_spaces(request.form.get('zvanie', ''))
@@ -1585,8 +2165,12 @@ def service_characteristic():
         imya_input = _normalize_spaces(request.form.get('imya', ''))
         po_batkovi_input = _normalize_spaces(request.form.get('po_batkovi', ''))
         posada_input = _normalize_spaces(request.form.get('zaimana_posada', ''))
-        komisariat_input = request.form.get('komisariat_ta_data_prizovu', '')
-        osvita_input = request.form.get('osvita', '')
+        komisariat_input = request.form.get('komisariat', '')
+        data_pryzovu_input = request.form.get('data_pryzovu', '')
+        osvita_type_input = request.form.get('osvita_type', '')
+        navchalnyy_zaklad_input = request.form.get('navchalnyy_zaklad', '')
+        misto_zakladu_input = request.form.get('misto_navchalnogo_zakladu', '')
+        rik_zakinchennya_input = request.form.get('rik_zakinchennya', '')
 
         pidpysant_1_zvannya = _normalize_spaces(request.form.get('pidpysant_1_zvannya', ''))
         pidpysant_1_pib = _normalize_spaces(request.form.get('pidpysant_1_pib', ''))
@@ -1594,7 +2178,7 @@ def service_characteristic():
         pidpysant_2_pib = _normalize_spaces(request.form.get('pidpysant_2_pib', ''))
 
         if not pib_nazivnyi:
-            flash("ПІБ (в називному відмінку) є обов'язковим полем", "error")
+            flash("Прізвище Ім'я по-батькові є обов'язковим полем", "error")
             return render_template('service_characteristic.html', signatory_defaults=signatory_defaults)
         if not pidpysant_1_zvannya or not pidpysant_1_pib:
             flash("Заповніть звання і ПІБ для 1-го підписанта", "error")
@@ -1603,14 +2187,25 @@ def service_characteristic():
             flash("Заповніть звання і ПІБ для 2-го підписанта", "error")
             return render_template('service_characteristic.html', signatory_defaults=signatory_defaults)
 
-        komisariat_ta_data_prizovu = _format_komisariat_and_date(komisariat_input)
+        komisariat_ta_data_prizovu = _format_komisariat_parts(komisariat_input, data_pryzovu_input)
         if not komisariat_ta_data_prizovu:
-            flash("Поле 'Яким військовим комісаріатом і коли...' має містити коректну дату у форматі дд.мм.рррр", "error")
+            flash(
+                "Заповніть військовий комісаріат і коректну дату призову у форматі дд.мм.рррр",
+                "error",
+            )
             return render_template('service_characteristic.html', signatory_defaults=signatory_defaults)
 
-        osvita = _ensure_final_period(_title_first_letter(osvita_input))
+        osvita = _format_osvita_parts(
+            osvita_type_input,
+            navchalnyy_zaklad_input,
+            misto_zakladu_input,
+            rik_zakinchennya_input,
+        )
         if not osvita:
-            flash("Поле 'Освіта' є обов'язковим", "error")
+            flash(
+                "Заповніть освіту: вид, навчальний заклад, місто та рік закінчення (4 цифри)",
+                "error",
+            )
             return render_template('service_characteristic.html', signatory_defaults=signatory_defaults)
 
         zvanie = zvanie_input
@@ -1695,6 +2290,7 @@ def service_characteristic():
             'pidpysant_2_zvannya': pidpysant_2_zvannya,
             'pidpysant_2_pib': pidpysant_2_pib,
             'imya_ta_prizvyshche_pidpys': f"{imya} {prizvyshche.upper()}",
+            'data_stvorennya': datetime.now().strftime("%d.%m.%Y"),
         }
 
         try:
@@ -1714,6 +2310,7 @@ def service_characteristic():
             flash(f"Помилка генерації DOCX: {e}", "error")
             return render_template('service_characteristic.html', signatory_defaults=signatory_defaults)
 
+        _loader_preview_delay()
         response = make_response(send_file(
             file_stream, as_attachment=True,
             download_name=f'Службова_характеристика_{imya}_{prizvyshche.upper()}.docx',
@@ -1725,31 +2322,193 @@ def service_characteristic():
     return render_template('service_characteristic.html', signatory_defaults=signatory_defaults)
 
 
+def _build_report_body_text(
+    report_type: str,
+    zvanie: str,
+    sluzhba_type: str,
+    pib_nazivnyi: str,
+    misce_napravlennya: str = "",
+    data_gospitalizatsii: str = "",
+) -> str:
+    """Формує текст тіла рапорту залежно від типу."""
+    if report_type == "vlk":
+        return (
+            "Прошу Вас про надання мені законної можливості проходження військово-лікарської комісії "
+            "з метою встановлення придатності/непридатності до військової служби згідно Наказу МВС України "
+            "від 14.08.2008 № 402 (зі змінами та додатками), з метою визначення придатності (непридатності) "
+            "до подальшого проходження військової служби."
+        )
+    if report_type == "material_aid":
+        return (
+            "Прошу Вашого клопотання перед вищим командуванням про надання мені матеріальної допомоги "
+            "для вирішення соціально-побутових питань за 2024 рік відповідно до наказу МВС України "
+            "від 15.03.2018 № 200 «Про затвердження Інструкції про порядок виплати грошового забезпечення "
+            "та одноразової грошової допомоги при звільненні військовослужбовцям Національної гвардії України "
+            "та іншим особам»."
+        )
+    if report_type == "ozdorovlennya":
+        return (
+            "Прошу Вашого клопотання перед командиром військової частини 3029 про надання мені допомоги "
+            "для оздоровлення за 2026 рік, згідно ПКМУ № 704 від 30.08.2017."
+        )
+
+    pib_title = _normalize_spaces(
+        " ".join(_surname_first_capital(part) for part in pib_nazivnyi.split(" ") if part)
+    )
+    rank = _normalize_spaces(zvanie).lower()
+    service = _normalize_spaces(sluzhba_type)
+    clinic = _normalize_spaces(misce_napravlennya)
+
+    if report_type == "hospitalization":
+        return (
+            f"Я, {rank} {service}, {pib_title}, прошу Вашого клопотання перед командиром військової частини "
+            f"про надання мені дозволу на госпіталізацію в {clinic}. "
+            f"Госпіталізація запланована на {_normalize_spaces(data_gospitalizatsii)}."
+        )
+    if report_type == "consultation":
+        return (
+            f"Я, {rank} {service}, {pib_title}, прошу Вашого клопотання перед командиром військової частини "
+            f"про надання мені дозволу на консультацію в {clinic}."
+        )
+    return ""
+
+
+# Рапорти з вільним текстом додатка (без «Копію консультативного висновку»).
+_REPORT_TYPES_FREE_DODATOK = frozenset({"material_aid", "ozdorovlennya"})
+_REPORT_TYPES_VACATION = frozenset({"vacation"})
+_REPORT_TYPES_ALL = frozenset({
+    "vlk", "hospitalization", "consultation", "material_aid", "ozdorovlennya", "vacation",
+})
+
+
+def _build_report_dodatok_line(
+    report_type: str,
+    *,
+    dodatok: str = "",
+    oglyad_nuber: str = "",
+    likar: str = "",
+    hospital: str = "",
+) -> str:
+    """Рядок після «До рапорту додаю:» (з нумерацією «1.»)."""
+    if report_type in _REPORT_TYPES_FREE_DODATOK:
+        body = _normalize_spaces(dodatok)
+    else:
+        # Лише для ВЛК / госпіталізації / консультації.
+        parts = ["Копію консультативного висновку"]
+        if oglyad_nuber:
+            parts.append(f"№{oglyad_nuber}")
+        if likar:
+            parts.append(likar)
+        if hospital:
+            parts.append(hospital)
+        body = _normalize_spaces(" ".join(parts))
+    if not body:
+        return ""
+    return f"1.\t{body}"
+
+
+def _set_paragraph_text(paragraph, text: str) -> None:
+    if paragraph.runs:
+        paragraph.runs[0].text = text
+        for run in paragraph.runs[1:]:
+            run.text = ""
+    else:
+        paragraph.text = text
+
+
+def _load_vlk_report_template() -> DocxTemplate:
+    """Завантажує шаблон рапорту; рядок додатка = лише {{ dodatok_line }}."""
+    marker = "{{ dodatok_line }}"
+    docx = DocxDocument(VLK_REPORT_TEMPLATE)
+    changed = False
+    for paragraph in docx.paragraphs:
+        text = paragraph.text or ""
+        needs_fix = (
+            "dodatok_line" in text
+            or "oglyad_nuber" in text
+            or "консультативного висновку" in text
+        )
+        if not needs_fix:
+            continue
+        if text.strip() == marker:
+            continue
+        _set_paragraph_text(paragraph, marker)
+        changed = True
+    stream = io.BytesIO()
+    docx.save(stream)
+    stream.seek(0)
+    if changed:
+        try:
+            with open(VLK_REPORT_TEMPLATE, "wb") as fh:
+                fh.write(stream.getvalue())
+            stream.seek(0)
+        except OSError:
+            # Файл може бути відкритий у Word — працюємо з копією в пам’яті.
+            stream.seek(0)
+    return DocxTemplate(stream)
+
+
 @app.route('/vlk-report', methods=['GET', 'POST'])
 def vlk_report():
-    """Генерація рапорту на ВЛК через Jinja-плейсхолдери у vlk_report.docx."""
+    """Генерація рапортів (медичні / матдопомога / оздоровлення / відпустка)."""
     signatory_defaults = load_service_signatories()
     vlk_signatory_defaults = load_vlk_signatories()
     defaults = {
+        "report_type": "vlk",
+        "sluzhba_type": "за мобілізацією",
+        "misce_napravlennya": "",
         "oglyad_nuber": "",
         "likar": "",
         "hospital": "",
+        "dodatok": "",
+        "data_gospitalizatsii": "",
+        "vacantion_start_day": "",
+        "vacantion_adress": "",
+        "vacantion_phone": "",
         "pib_nazivnyi": "",
         "tvo_kombrig_zvannya": vlk_signatory_defaults.get("tvo_kombrig_zvannya", ""),
         "tvo_kombrig_pib": vlk_signatory_defaults.get("tvo_kombrig_pib", ""),
         "tvo_kombat_zvannya": vlk_signatory_defaults.get("tvo_kombat_zvannya", "") or signatory_defaults.get("pidpysant_2_zvannya", ""),
         "tvo_kombat_pib": vlk_signatory_defaults.get("tvo_kombat_pib", "") or signatory_defaults.get("pidpysant_2_pib", ""),
+        "kombrig_options": vlk_signatory_defaults.get("kombrig_options", []),
+        "kombat_options": vlk_signatory_defaults.get("kombat_options", []),
     }
 
     if request.method == 'POST':
-        if not os.path.isfile(VLK_REPORT_TEMPLATE):
-            flash("Не знайдено шаблон templates/vlk_report.docx", "error")
+        report_type = _normalize_spaces(request.form.get("report_type", "vlk"))
+        if report_type not in _REPORT_TYPES_ALL:
+            report_type = "vlk"
+
+        template_path = (
+            VACATION_REPORT_TEMPLATE
+            if report_type in _REPORT_TYPES_VACATION
+            else VLK_REPORT_TEMPLATE
+        )
+        template_label = (
+            "templates/vacantion_report.docx"
+            if report_type in _REPORT_TYPES_VACATION
+            else "templates/vlk_report.docx"
+        )
+        if not os.path.isfile(template_path):
+            flash(f"Не знайдено шаблон {template_label}", "error")
             return render_template('vlk_report.html', defaults=defaults)
 
+        sluzhba_type = _normalize_spaces(request.form.get("sluzhba_type", "за мобілізацією"))
+        if sluzhba_type not in ("за мобілізацією", "за контрактом"):
+            sluzhba_type = "за мобілізацією"
+
         payload = {
+            "report_type": report_type,
+            "sluzhba_type": sluzhba_type,
+            "misce_napravlennya": _normalize_spaces(request.form.get("misce_napravlennya", "")),
             "oglyad_nuber": _normalize_spaces(request.form.get("oglyad_nuber", "")),
             "likar": _normalize_spaces(request.form.get("likar", "")),
             "hospital": _normalize_spaces(request.form.get("hospital", "")),
+            "dodatok": _normalize_spaces(request.form.get("dodatok", "")),
+            "data_gospitalizatsii": _normalize_spaces(request.form.get("data_gospitalizatsii", "")),
+            "vacantion_start_day": _normalize_spaces(request.form.get("vacantion_start_day", "")),
+            "vacantion_adress": _normalize_spaces(request.form.get("vacantion_adress", "")),
+            "vacantion_phone": _normalize_spaces(request.form.get("vacantion_phone", "")),
             "pib_nazivnyi": _normalize_spaces(request.form.get("pib_nazivnyi", "")),
             "tvo_kombrig_zvannya": _normalize_spaces(request.form.get("tvo_kombrig_zvannya", "")),
             "tvo_kombrig_pib": _normalize_spaces(request.form.get("tvo_kombrig_pib", "")),
@@ -1757,7 +2516,32 @@ def vlk_report():
             "tvo_kombat_pib": _normalize_spaces(request.form.get("tvo_kombat_pib", "")),
         }
         defaults.update(payload)
-        if not all(payload.values()):
+
+        required_ok = all([
+            payload["pib_nazivnyi"],
+            payload["tvo_kombrig_zvannya"],
+            payload["tvo_kombrig_pib"],
+            payload["tvo_kombat_zvannya"],
+            payload["tvo_kombat_pib"],
+        ])
+        if report_type in _REPORT_TYPES_VACATION:
+            if not all([
+                payload["vacantion_start_day"],
+                payload["vacantion_adress"],
+                payload["vacantion_phone"],
+            ]):
+                required_ok = False
+        elif report_type in _REPORT_TYPES_FREE_DODATOK:
+            if not payload["dodatok"]:
+                required_ok = False
+        else:
+            if not payload["likar"] or not payload["hospital"]:
+                required_ok = False
+        if report_type in ("hospitalization", "consultation") and not payload["misce_napravlennya"]:
+            required_ok = False
+        if report_type == "hospitalization" and not payload["data_gospitalizatsii"]:
+            required_ok = False
+        if not required_ok:
             flash("Заповніть усі обов'язкові поля рапорту.", "error")
             return render_template('vlk_report.html', defaults=defaults)
 
@@ -1793,11 +2577,13 @@ def vlk_report():
             first = first or p_first
             pat = pat or p_pat
 
-        pib_gen_line = build_pib_rodovyi_for_document(f"{sur} {first} {pat}", "")
-        pib_gen_parts = pib_gen_line.split(' ')
-        gen_surname = _surname_first_capital(pib_gen_parts[0] if pib_gen_parts else sur)
+        pib_full_nazivnyi = _normalize_spaces(f"{sur} {first} {pat}")
+        pib_gen_line = build_pib_rodovyi_for_document(pib_full_nazivnyi, "")
+        pib_gen_title = _normalize_spaces(
+            " ".join(_surname_first_capital(part) for part in pib_gen_line.split(" ") if part)
+        )
         fraza_zvannya_ta_pib_rodovyi = _normalize_spaces(
-            f"{format_rank_genitive(zvanie)} {_format_initials_name(gen_surname, first, pat)}"
+            f"{format_rank_genitive(zvanie)} {pib_gen_title}"
         )
         tvo_kombrig_zvannya_dav = format_rank_dative(payload["tvo_kombrig_zvannya"])
         tvo_kombrig_pib_dav = _uppercase_last_word(_pib_to_dative(payload["tvo_kombrig_pib"]))
@@ -1805,10 +2591,31 @@ def vlk_report():
         tvo_kombat_pib_dav = _uppercase_last_word(_pib_to_dative(payload["tvo_kombat_pib"]))
         tvo_kombrig_zvannya_short = _rank_short(payload["tvo_kombrig_zvannya"])
         tvo_kombrig_pib_short = _pib_short_with_initials(payload["tvo_kombrig_pib"])
+        tekst_raportu = _build_report_body_text(
+            report_type=report_type,
+            zvanie=zvanie,
+            sluzhba_type=sluzhba_type,
+            pib_nazivnyi=pib_full_nazivnyi,
+            misce_napravlennya=payload["misce_napravlennya"],
+            data_gospitalizatsii=payload["data_gospitalizatsii"],
+        )
+        dodatok_line = _build_report_dodatok_line(
+            report_type,
+            dodatok=payload["dodatok"],
+            oglyad_nuber=payload["oglyad_nuber"],
+            likar=payload["likar"],
+            hospital=payload["hospital"],
+        )
         context = {
             "oglyad_nuber": payload["oglyad_nuber"],
             "likar": payload["likar"],
             "hospital": payload["hospital"],
+            "dodatok": payload["dodatok"],
+            "dodatok_line": dodatok_line,
+            "tekst_raportu": tekst_raportu,
+            "vacantion_start_day": payload["vacantion_start_day"],
+            "vacantion_adress": payload["vacantion_adress"],
+            "vacantion_phone": payload["vacantion_phone"],
             "zaimana_posada_z_velykoi": _title_first_letter(_ensure_final_period(zaimana_posada).rstrip(".")),
             "zvanie": zvanie,
             "imya_ta_prizvyshche_pidpys": _normalize_spaces(f"{first} {sur.upper()}"),
@@ -1823,6 +2630,7 @@ def vlk_report():
             "tvo_kombat_pib_dav": tvo_kombat_pib_dav,
             "tvo_kombrig_zvannya_short": tvo_kombrig_zvannya_short,
             "tvo_kombrig_pib_short": tvo_kombrig_pib_short,
+            "data_stvorennya": datetime.now().strftime("%d.%m.%Y"),
             # Сумісність із шаблонами, де частина плейсхолдерів введена ВЕЛИКИМИ.
             "TVO_KOMBRIG_PIB_DAV": tvo_kombrig_pib_dav,
             "TVO_KOMBAT_PIB_DAV": tvo_kombat_pib_dav,
@@ -1838,20 +2646,33 @@ def vlk_report():
             # Підтримка шаблону з потенційними описками у назвах плейсхолдерів.
             context["tvo_kombat_ zvannya"] = payload["tvo_kombat_zvannya"]
             context["tvo_kombat_ zvannya_dav"] = tvo_kombat_zvannya_dav
-            doc = DocxTemplate(VLK_REPORT_TEMPLATE)
+            if report_type in _REPORT_TYPES_VACATION:
+                doc = DocxTemplate(VACATION_REPORT_TEMPLATE)
+            else:
+                doc = _load_vlk_report_template()
             doc.render(context)
             file_stream = io.BytesIO()
             doc.save(file_stream)
             file_stream.seek(0)
         except Exception as e:
-            logger.error("Помилка при генерації рапорту ВЛК: %s", e)
+            logger.error("Помилка при генерації рапорту: %s", e)
             flash(f"Помилка генерації DOCX: {e}", "error")
             return render_template('vlk_report.html', defaults=defaults)
 
-        safe_name = secure_filename(sur or "VLK")
+        file_prefix = {
+            "vlk": "Рапорт_на_ВЛК",
+            "hospitalization": "Рапорт_на_госпіталізацію",
+            "consultation": "Рапорт_на_консультацію",
+            "material_aid": "Рапорт_на_матеріальну_допомогу",
+            "ozdorovlennya": "Рапорт_на_оздоровлення",
+            "vacation": "Рапорт_на_відпустку",
+        }.get(report_type, "Рапорт")
+        pib_for_file = _normalize_spaces(f"{first} {sur}".strip()) or pib_full_nazivnyi or sur
+        safe_name = _safe_download_stem(pib_for_file, "report")
+        _loader_preview_delay()
         response = make_response(send_file(
             file_stream, as_attachment=True,
-            download_name=f'Рапорт_на_ВЛК_{safe_name}.docx',
+            download_name=f'{file_prefix}_{safe_name}.docx',
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         ))
         response.set_cookie('fileDownload', 'true', max_age=20)
@@ -1864,6 +2685,7 @@ def _warmup_treatments_cache():
     try:
         with app.app_context():
             load_treatments_data()
+            load_base_personnel_data()
         logger.info("Прогрів кешу Excel завершено — пошук готовий.")
     except Exception as e:
         logger.warning(

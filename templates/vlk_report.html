@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Рапорт на ВЛК - МедХар{% endblock %}
+{% block title %}Рапорти - Медичний пункт батальйону{% endblock %}
 {% block content %}
 <div class="container">
   <div class="row justify-content-center">
     <div class="col-lg-10">
       <div class="page-header text-center">
-        <h1><i class="fas fa-file-lines me-3"></i>Рапорт на ВЛК</h1>
-        <p class="lead">Генерація за плейсхолдерами у шаблоні DOCX</p>
+        <h1><i class="fas fa-file-lines me-2"></i>Рапорти</h1>
+        <p class="lead">ВЛК, госпіталізація, консультація, матдопомога, оздоровлення, відпустка</p>
       </div>
 
       {% with messages = get_flashed_messages(with_categories=true) %}
@@ -22,80 +22,212 @@
 
       <div class="card">
         <div class="card-header">
-          <h5 class="mb-0"><i class="fas fa-pen me-2"></i>Заповніть дані рапорту</h5>
+          <h5 class="mh-section-title mb-0"><i class="fas fa-pen"></i>Заповніть дані рапорту</h5>
         </div>
         <div class="card-body">
           <form id="generation-form" method="POST">
-            <h6 class="mb-3">Реквізити медичного висновку</h6>
-            <div class="mb-3">
-              <label for="oglyad_nuber" class="form-label">Номер консультативного висновку спеціаліста</label>
-              <input type="text" id="oglyad_nuber" name="oglyad_nuber" class="form-control" value="{{ defaults.oglyad_nuber }}" required />
+            <h6 class="mb-3">Тип рапорту</h6>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label for="report_type" class="form-label">Тип</label>
+                <select id="report_type" name="report_type" class="form-select" required>
+                  <option value="vlk" {% if defaults.report_type == 'vlk' %}selected{% endif %}>Рапорт на ВЛК</option>
+                  <option value="hospitalization" {% if defaults.report_type == 'hospitalization' %}selected{% endif %}>Рапорт на госпіталізацію</option>
+                  <option value="consultation" {% if defaults.report_type == 'consultation' %}selected{% endif %}>Рапорт на консультацію</option>
+                  <option value="material_aid" {% if defaults.report_type == 'material_aid' %}selected{% endif %}>Рапорт на матеріальну допомогу</option>
+                  <option value="ozdorovlennya" {% if defaults.report_type == 'ozdorovlennya' %}selected{% endif %}>Рапорт на оздоровлення</option>
+                  <option value="vacation" {% if defaults.report_type == 'vacation' %}selected{% endif %}>Рапорт на відпустку</option>
+                </select>
+              </div>
+              <div class="col-md-6 mb-3" id="sluzhba-type-wrap">
+                <label for="sluzhba_type" class="form-label">Тип служби</label>
+                <select id="sluzhba_type" name="sluzhba_type" class="form-select">
+                  <option value="за мобілізацією" {% if defaults.sluzhba_type != 'за контрактом' %}selected{% endif %}>за мобілізацією</option>
+                  <option value="за контрактом" {% if defaults.sluzhba_type == 'за контрактом' %}selected{% endif %}>за контрактом</option>
+                </select>
+              </div>
             </div>
-            <div class="mb-3">
-              <label for="likar" class="form-label">Спеціалізація лікаря</label>
-              <input type="text" id="likar" name="likar" class="form-control" value="{{ defaults.likar }}" required />
+
+            <hr />
+            <div id="misce-napravlennya-wrap" style="display: none;">
+              <h6 class="mb-3" id="misce-napravlennya-title">Місце направлення</h6>
+              <div class="mb-3">
+                <label for="misce_napravlennya" class="form-label" id="misce-napravlennya-label">ЛПЗ</label>
+                <select id="misce_napravlennya" name="misce_napravlennya" placeholder="Почніть вводити назву ЛПЗ...">
+                  {% if defaults.misce_napravlennya %}
+                  <option value="{{ defaults.misce_napravlennya }}" selected>{{ defaults.misce_napravlennya }}</option>
+                  {% endif %}
+                </select>
+              </div>
+              <div class="mb-3" id="hospitalization-date-wrap" style="display: none;">
+                <label for="data_gospitalizatsii" class="form-label">Дата госпіталізації</label>
+                <input type="text" id="data_gospitalizatsii" name="data_gospitalizatsii" class="form-control" value="{{ defaults.data_gospitalizatsii }}" placeholder="дд.мм.рррр" />
+              </div>
+              <hr />
             </div>
-            <div class="mb-3">
-              <label for="hospital" class="form-label">Назва ЛПЗ</label>
-              <input type="text" id="hospital" name="hospital" class="form-control" value="{{ defaults.hospital }}" required />
+
+            <div id="vacation-fields-wrap" style="display: none;">
+              <h6 class="mb-3">Дані відпустки</h6>
+              <div class="row">
+                <div class="col-md-4 mb-3">
+                  <label for="vacantion_start_day" class="form-label">Дата початку відпустки</label>
+                  <input
+                    type="text"
+                    id="vacantion_start_day"
+                    name="vacantion_start_day"
+                    class="form-control"
+                    value="{{ defaults.vacantion_start_day }}"
+                    placeholder="дд.мм.рррр"
+                  />
+                </div>
+                <div class="col-md-4 mb-3">
+                  <label for="vacantion_phone" class="form-label">Телефон для зв’язку</label>
+                  <input
+                    type="text"
+                    id="vacantion_phone"
+                    name="vacantion_phone"
+                    class="form-control"
+                    value="{{ defaults.vacantion_phone }}"
+                    placeholder="+380…"
+                  />
+                </div>
+                <div class="col-md-12 mb-3">
+                  <label for="vacantion_adress" class="form-label">Адреса проведення відпустки</label>
+                  <input
+                    type="text"
+                    id="vacantion_adress"
+                    name="vacantion_adress"
+                    class="form-control"
+                    value="{{ defaults.vacantion_adress }}"
+                    placeholder="Область, місто, вулиця, будинок"
+                  />
+                </div>
+              </div>
+              <hr />
+            </div>
+
+            <div id="dodatok-section-wrap">
+            <h6 class="mb-3">Додаток до рапорту</h6>
+            <div id="medical-dodatok-wrap">
+              <div class="row">
+                <div class="col-md-5 mb-3">
+                  <label for="oglyad_nuber" class="form-label">Номер консультативного висновку спеціаліста</label>
+                  <input type="text" id="oglyad_nuber" name="oglyad_nuber" class="form-control" value="{{ defaults.oglyad_nuber }}" />
+                </div>
+                <div class="col-md-7 mb-3">
+                  <label for="likar" class="form-label">Спеціалізація лікаря</label>
+                  <select id="likar" name="likar" required placeholder="Почніть вводити спеціалізацію...">
+                    {% if defaults.likar %}
+                    <option value="{{ defaults.likar }}" selected>{{ defaults.likar }}</option>
+                    {% endif %}
+                  </select>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label for="hospital" class="form-label">Назва ЛПЗ</label>
+                <select id="hospital" name="hospital" required placeholder="Почніть вводити назву ЛПЗ...">
+                  {% if defaults.hospital %}
+                  <option value="{{ defaults.hospital }}" selected>{{ defaults.hospital }}</option>
+                  {% endif %}
+                </select>
+                <div class="form-text">ЛПЗ, яке видало висновок (для рядка «До рапорту додаю»).</div>
+              </div>
+            </div>
+            <div id="free-dodatok-wrap" style="display: none;">
+              <div class="mb-3">
+                <label for="dodatok" class="form-label">Що додається до рапорту</label>
+                <input
+                  type="text"
+                  id="dodatok"
+                  name="dodatok"
+                  class="form-control"
+                  value="{{ defaults.dodatok }}"
+                  placeholder="Наприклад: Копія форми 001 від 22.07.2026"
+                />
+                <div class="form-text">Вільний текст без префікса «Копію консультативного висновку» — наприклад: «Копія форми 001 від 22.07.2026».</div>
+              </div>
+            </div>
             </div>
 
             <hr />
             <h6 class="mb-3">Військовослужбовець</h6>
             <div class="mb-3">
               <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>ПІБ (автокомпліт)</label>
-              <div class="autocomplete-container">
-                <input type="text" id="pib_nazivnyi" name="pib_nazivnyi" class="form-control" value="{{ defaults.pib_nazivnyi }}" placeholder="Почніть вводити ПІБ..." required />
-                <div id="pib-suggestions" class="autocomplete-suggestions"></div>
-              </div>
-            </div>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Поле 4: посада (авто з base)</label>
-                <input type="text" id="auto_posada" class="form-control" readonly />
-              </div>
-              <div class="col-md-6 mb-3">
-                <label class="form-label">Поле 5: звання (авто з base)</label>
-                <input type="text" id="auto_zvanie" class="form-control" readonly />
-              </div>
+              <select id="pib_nazivnyi" name="pib_nazivnyi" required placeholder="Почніть вводити ПІБ...">
+                {% if defaults.pib_nazivnyi %}
+                <option value="{{ defaults.pib_nazivnyi }}" selected>{{ defaults.pib_nazivnyi }}</option>
+                {% endif %}
+              </select>
+              <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
             </div>
 
             <hr />
-            <h6 class="mb-3">ТВО командира частини</h6>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label for="tvo_kombrig_zvannya" class="form-label">ТВО командира частини: звання (називний)</label>
-              <input type="text" id="tvo_kombrig_zvannya" name="tvo_kombrig_zvannya" class="form-control" value="{{ defaults.tvo_kombrig_zvannya }}" required />
-              </div>
-              <div class="col-md-6 mb-3">
-                <label for="tvo_kombrig_pib" class="form-label">ТВО командира частини: ПІБ (називний)</label>
-              <input type="text" id="tvo_kombrig_pib" name="tvo_kombrig_pib" class="form-control" value="{{ defaults.tvo_kombrig_pib }}" required />
-              </div>
+            <h6 class="mb-3">Підписанти</h6>
+            <div class="mb-3">
+              <label for="tvo_kombrig_select" class="form-label">ТВО командира частини</label>
+              <select id="tvo_kombrig_select" class="form-select" required>
+                <option value="">Оберіть підписанта</option>
+                {% for opt in defaults.kombrig_options %}
+                <option
+                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
+                  {% if opt.zvannya == defaults.tvo_kombrig_zvannya and opt.pib == defaults.tvo_kombrig_pib %}selected{% endif %}
+                >{{ opt.zvannya }} {{ opt.pib }}</option>
+                {% endfor %}
+              </select>
+              <input type="hidden" id="tvo_kombrig_zvannya" name="tvo_kombrig_zvannya" value="{{ defaults.tvo_kombrig_zvannya }}" required />
+              <input type="hidden" id="tvo_kombrig_pib" name="tvo_kombrig_pib" value="{{ defaults.tvo_kombrig_pib }}" required />
+            </div>
+            <div class="mb-3">
+              <label for="tvo_kombat_select" class="form-label">ТВО командира батальйону</label>
+              <select id="tvo_kombat_select" class="form-select" required>
+                <option value="">Оберіть підписанта</option>
+                {% for opt in defaults.kombat_options %}
+                <option
+                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
+                  {% if opt.zvannya == defaults.tvo_kombat_zvannya and opt.pib == defaults.tvo_kombat_pib %}selected{% endif %}
+                >{{ opt.zvannya }} {{ opt.pib }}</option>
+                {% endfor %}
+              </select>
+              <input type="hidden" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" value="{{ defaults.tvo_kombat_zvannya }}" required />
+              <input type="hidden" id="tvo_kombat_pib" name="tvo_kombat_pib" value="{{ defaults.tvo_kombat_pib }}" required />
             </div>
 
-            <hr />
-            <h6 class="mb-3">ТВО командира батальйону</h6>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label for="tvo_kombat_zvannya" class="form-label">ТВО командира батальйону: звання</label>
-                <input type="text" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" class="form-control" value="{{ defaults.tvo_kombat_zvannya }}" required />
-              </div>
-              <div class="col-md-6 mb-3">
-                <label for="tvo_kombat_pib" class="form-label">ТВО командира батальйону: ПІБ</label>
-                <input type="text" id="tvo_kombat_pib" name="tvo_kombat_pib" class="form-control" value="{{ defaults.tvo_kombat_pib }}" required />
-              </div>
-            </div>
-
-            <div class="mb-3 d-flex gap-2">
-              <button type="button" id="save-signatories-btn" class="btn btn-outline-secondary">
-                <i class="fas fa-save me-1"></i>Зберегти підписантів ВЛК
+            <div class="mb-3">
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#add-signatory-panel" aria-expanded="false">
+                <i class="fas fa-user-plus me-1"></i>Додати підписанта
               </button>
-              <span id="save-signatories-msg" class="small text-muted align-self-center"></span>
+            </div>
+            <div class="collapse mb-3" id="add-signatory-panel">
+              <div class="border rounded p-3 bg-white">
+                <div class="row g-2">
+                  <div class="col-md-3">
+                    <label for="new_signatory_role" class="form-label">Роль</label>
+                    <select id="new_signatory_role" class="form-select">
+                      <option value="kombrig">ТВО командира частини</option>
+                      <option value="kombat">ТВО командира батальйону</option>
+                    </select>
+                  </div>
+                  <div class="col-md-3">
+                    <label for="new_signatory_zvannya" class="form-label">Звання</label>
+                    <input type="text" id="new_signatory_zvannya" class="form-control" placeholder="капітан" />
+                  </div>
+                  <div class="col-md-4">
+                    <label for="new_signatory_pib" class="form-label">ПІБ (називний)</label>
+                    <input type="text" id="new_signatory_pib" class="form-control" placeholder="Ім'я ПРІЗВИЩЕ" />
+                  </div>
+                  <div class="col-md-2 d-flex align-items-end">
+                    <button type="button" id="add-signatory-btn" class="btn btn-primary w-100">
+                      <i class="fas fa-plus me-1"></i>Додати
+                    </button>
+                  </div>
+                </div>
+                <div id="add-signatory-msg" class="small text-muted mt-2"></div>
+              </div>
             </div>
 
             <div class="d-grid">
               <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
-                <i class="fas fa-file-word me-2"></i>Створити рапорт на ВЛК
+                <i class="fas fa-file-word me-2"></i><span id="submit-button-label">Створити рапорт на ВЛК</span>
               </button>
             </div>
           </form>
@@ -107,160 +239,219 @@
 {% endblock %}
 
 {% block extra_css %}
-<style>
-  .autocomplete-container { position: relative; }
-  .autocomplete-suggestions {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: white;
-    border: 1px solid #ced4da;
-    border-top: none;
-    max-height: 200px;
-    overflow-y: auto;
-    z-index: 1000;
-    display: none;
-    border-radius: 0 0 0.375rem 0.375rem;
-  }
-  .autocomplete-suggestion {
-    padding: 0.5rem 0.75rem;
-    cursor: pointer;
-    border-bottom: 1px solid #dee2e6;
-  }
-  .autocomplete-suggestion:hover,
-  .autocomplete-suggestion.selected { background-color: #f8f9fa; }
-  .autocomplete-suggestion:last-child { border-bottom: none; }
-</style>
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
+<link href="{{ url_for('static', filename='css/pib_tom_select.css') }}" rel="stylesheet" />
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lpz_tom_select.js') }}"></script>
 <script>
   const form = document.getElementById("generation-form");
   const submitButton = document.getElementById("submit-button");
-  const pibInput = document.getElementById("pib_nazivnyi");
-  const pibSuggestions = document.getElementById("pib-suggestions");
-  const autoPosada = document.getElementById("auto_posada");
-  const autoZvanie = document.getElementById("auto_zvanie");
-  const saveSignatoriesBtn = document.getElementById("save-signatories-btn");
-  const saveSignatoriesMsg = document.getElementById("save-signatories-msg");
-  let currentSuggestions = [];
-  let selectedIndex = -1;
-  let searchTimeout;
+  const submitButtonLabel = document.getElementById("submit-button-label");
+  const reportTypeSelect = document.getElementById("report_type");
+  const hospitalizationDateWrap = document.getElementById("hospitalization-date-wrap");
+  const hospitalizationDateInput = document.getElementById("data_gospitalizatsii");
+  const misceNapravlennyaWrap = document.getElementById("misce-napravlennya-wrap");
+  const misceNapravlennyaInput = document.getElementById("misce_napravlennya");
+  const misceNapravlennyaTitle = document.getElementById("misce-napravlennya-title");
+  const misceNapravlennyaLabel = document.getElementById("misce-napravlennya-label");
+  const sluzhbaTypeWrap = document.getElementById("sluzhba-type-wrap");
+  const medicalDodatokWrap = document.getElementById("medical-dodatok-wrap");
+  const freeDodatokWrap = document.getElementById("free-dodatok-wrap");
+  const dodatokSectionWrap = document.getElementById("dodatok-section-wrap");
+  const vacationFieldsWrap = document.getElementById("vacation-fields-wrap");
+  const vacantionStartDayInput = document.getElementById("vacantion_start_day");
+  const vacantionAdressInput = document.getElementById("vacantion_adress");
+  const vacantionPhoneInput = document.getElementById("vacantion_phone");
+  const dodatokInput = document.getElementById("dodatok");
+  const likarSelect = document.getElementById("likar");
+  const hospitalSelect = document.getElementById("hospital");
+  let misceLpzTomSelect = null;
+  let hospitalLpzTomSelect = null;
+  let likarTomSelect = null;
 
-  async function searchPIB(query) {
-    if (!pibInput || query.length < 2) {
-      hideSuggestions();
+  function showPibInfoAlert(item) {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    const rank = (item && item.rank) ? String(item.rank).trim() : "";
+    const position = (item && item.position) ? String(item.position).trim() : "";
+    if (!rank && !position) {
+      alertEl.classList.add("d-none");
+      alertEl.textContent = "";
       return;
     }
-    try {
-      const response = await fetch(`/api/search_pib?q=${encodeURIComponent(query)}&context=service`);
-      if (!response.ok) throw new Error(String(response.status));
-      const data = await response.json();
-      if (data.results && data.results.length > 0) showSuggestions(data.results);
-      else hideSuggestions();
-    } catch (_) {
-      hideSuggestions();
+    const parts = [];
+    if (rank) parts.push(rank);
+    if (position) parts.push(position);
+    alertEl.textContent = parts.join(" · ");
+    alertEl.classList.remove("d-none");
+  }
+
+  function hidePibInfoAlert() {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    alertEl.classList.add("d-none");
+    alertEl.textContent = "";
+  }
+
+  const submitLabels = {
+    vlk: "Створити рапорт на ВЛК",
+    hospitalization: "Створити рапорт на госпіталізацію",
+    consultation: "Створити рапорт на консультацію",
+    material_aid: "Створити рапорт на матеріальну допомогу",
+    ozdorovlennya: "Створити рапорт на оздоровлення",
+    vacation: "Створити рапорт на відпустку",
+  };
+
+  const freeDodatokTypes = {
+    material_aid: true,
+    ozdorovlennya: true,
+  };
+
+  const misceLabels = {
+    hospitalization: {
+      title: "Місце госпіталізації",
+      label: "ЛПЗ для госпіталізації",
+    },
+    consultation: {
+      title: "Місце консультації",
+      label: "ЛПЗ для консультації",
+    },
+  };
+
+  function setTomRequired(ts, el, required) {
+    if (ts) {
+      if (required) ts.enable();
+      else {
+        ts.clear(true);
+        ts.disable();
+      }
+    }
+    if (el) el.required = !!required;
+  }
+
+  function syncReportTypeUi() {
+    const type = reportTypeSelect ? reportTypeSelect.value : "vlk";
+    const isHospitalization = type === "hospitalization";
+    const needsMisce = type === "hospitalization" || type === "consultation";
+    const needsVacation = type === "vacation";
+    const needsFreeDodatok = !!freeDodatokTypes[type];
+    const needsMedicalDodatok = !needsFreeDodatok && !needsVacation;
+    const needsDodatokSection = needsMedicalDodatok || needsFreeDodatok;
+
+    if (sluzhbaTypeWrap) {
+      sluzhbaTypeWrap.style.display = needsMisce ? "block" : "none";
+    }
+
+    if (misceNapravlennyaWrap) {
+      misceNapravlennyaWrap.style.display = needsMisce ? "block" : "none";
+    }
+    if (misceNapravlennyaInput) {
+      misceNapravlennyaInput.required = needsMisce;
+    }
+    if (misceLpzTomSelect) {
+      if (needsMisce) misceLpzTomSelect.enable();
+      else {
+        misceLpzTomSelect.clear(true);
+        misceLpzTomSelect.disable();
+      }
+    }
+    if (needsMisce && misceLabels[type]) {
+      if (misceNapravlennyaTitle) misceNapravlennyaTitle.textContent = misceLabels[type].title;
+      if (misceNapravlennyaLabel) misceNapravlennyaLabel.textContent = misceLabels[type].label;
+    }
+
+    if (hospitalizationDateWrap) {
+      hospitalizationDateWrap.style.display = isHospitalization ? "block" : "none";
+    }
+    if (hospitalizationDateInput) {
+      hospitalizationDateInput.required = isHospitalization;
+    }
+
+    if (vacationFieldsWrap) {
+      vacationFieldsWrap.style.display = needsVacation ? "block" : "none";
+    }
+    [vacantionStartDayInput, vacantionAdressInput, vacantionPhoneInput].forEach(function (el) {
+      if (!el) return;
+      el.required = needsVacation;
+      if (!needsVacation) el.value = "";
+    });
+
+    if (dodatokSectionWrap) {
+      dodatokSectionWrap.style.display = needsDodatokSection ? "block" : "none";
+    }
+    if (medicalDodatokWrap) {
+      medicalDodatokWrap.style.display = needsMedicalDodatok ? "block" : "none";
+    }
+    if (freeDodatokWrap) {
+      freeDodatokWrap.style.display = needsFreeDodatok ? "block" : "none";
+    }
+    if (dodatokInput) {
+      dodatokInput.required = needsFreeDodatok;
+      if (!needsFreeDodatok) dodatokInput.value = "";
+    }
+    setTomRequired(likarTomSelect, likarSelect, needsMedicalDodatok);
+    setTomRequired(hospitalLpzTomSelect, hospitalSelect, needsMedicalDodatok);
+
+    if (submitButtonLabel) {
+      submitButtonLabel.textContent = submitLabels[type] || submitLabels.vlk;
     }
   }
 
-  function showSuggestions(suggestions) {
-    currentSuggestions = suggestions;
-    selectedIndex = -1;
-    pibSuggestions.innerHTML = "";
-    suggestions.forEach((suggestion) => {
-      const div = document.createElement("div");
-      div.className = "autocomplete-suggestion";
-      div.textContent = suggestion.label;
-      div.addEventListener("click", function () {
-        selectSuggestion(suggestion);
-      });
-      pibSuggestions.appendChild(div);
-    });
-    pibSuggestions.style.display = "block";
-  }
-
-  function hideSuggestions() {
-    if (!pibSuggestions) return;
-    pibSuggestions.style.display = "none";
-    currentSuggestions = [];
-    selectedIndex = -1;
-  }
-
-  function selectSuggestion(suggestion) {
-    pibInput.value = suggestion.value || "";
-    if (autoZvanie) autoZvanie.value = suggestion.rank || "";
-    if (autoPosada) autoPosada.value = suggestion.position || "";
-    hideSuggestions();
-  }
-
-  function handleKeyNavigation(e) {
-    if (!pibSuggestions || pibSuggestions.style.display === "none") return;
-    const suggestions = pibSuggestions.querySelectorAll(".autocomplete-suggestion");
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        selectedIndex = Math.min(selectedIndex + 1, suggestions.length - 1);
-        updateSelection(suggestions);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        selectedIndex = Math.max(selectedIndex - 1, -1);
-        updateSelection(suggestions);
-        break;
-      case "Enter":
-        e.preventDefault();
-        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
-          selectSuggestion(currentSuggestions[selectedIndex]);
-        }
-        break;
-      case "Escape":
-        hideSuggestions();
-        break;
-    }
-  }
-
-  function updateSelection(suggestions) {
-    suggestions.forEach((suggestion, index) => {
-      suggestion.classList.toggle("selected", index === selectedIndex);
-    });
-  }
-
-  function signatoriesPayload() {
+  function parseSignatoryValue(value) {
+    const parts = String(value || "").split("|||");
     return {
-      tvo_kombrig_zvannya: document.getElementById("tvo_kombrig_zvannya").value.trim(),
-      tvo_kombrig_pib: document.getElementById("tvo_kombrig_pib").value.trim(),
-      tvo_kombat_zvannya: document.getElementById("tvo_kombat_zvannya").value.trim(),
-      tvo_kombat_pib: document.getElementById("tvo_kombat_pib").value.trim(),
+      zvannya: (parts[0] || "").trim(),
+      pib: (parts[1] || "").trim(),
     };
   }
 
-  async function saveSignatories() {
-    const payload = signatoriesPayload();
-    if (!payload.tvo_kombrig_zvannya || !payload.tvo_kombrig_pib || !payload.tvo_kombat_zvannya || !payload.tvo_kombat_pib) {
-      saveSignatoriesMsg.textContent = "Заповніть усі поля підписантів";
-      saveSignatoriesMsg.className = "small text-danger align-self-center";
-      return false;
-    }
-    try {
-      saveSignatoriesBtn.disabled = true;
-      const r = await fetch("/api/vlk_signatories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      saveSignatoriesMsg.textContent = "Підписанти ВЛК збережені";
-      saveSignatoriesMsg.className = "small text-success align-self-center";
-      return true;
-    } catch (e) {
-      saveSignatoriesMsg.textContent = "Не вдалося зберегти: " + e.message;
-      saveSignatoriesMsg.className = "small text-danger align-self-center";
-      return false;
-    } finally {
-      saveSignatoriesBtn.disabled = false;
-    }
+  function encodeSignatoryValue(zvannya, pib) {
+    return String(zvannya || "").trim() + "|||" + String(pib || "").trim();
+  }
+
+  function syncHiddenFromSelect(selectEl, zvannyaId, pibId) {
+    const parsed = parseSignatoryValue(getTomValue(selectEl));
+    const zv = document.getElementById(zvannyaId);
+    const pib = document.getElementById(pibId);
+    if (zv) zv.value = parsed.zvannya;
+    if (pib) pib.value = parsed.pib;
+  }
+
+  function fillSignatorySelect(selectEl, options, selectedZv, selectedPib) {
+    if (!selectEl) return;
+    const preferred = encodeSignatoryValue(selectedZv, selectedPib);
+    const list = [{ value: "", label: "Оберіть підписанта" }];
+    (options || []).forEach(function (opt) {
+      const zv = (opt.zvannya || "").trim();
+      const pib = (opt.pib || "").trim();
+      if (!zv || !pib) return;
+      const value = encodeSignatoryValue(zv, pib);
+      list.push({ value: value, label: zv + " " + pib });
+    });
+    const preferredOk = preferred !== "|||" ? preferred : "";
+    refreshSelectOptions(selectEl, list, preferredOk);
+  }
+
+  function applySignatoryState(state) {
+    fillSignatorySelect(
+      document.getElementById("tvo_kombrig_select"),
+      state.kombrig_options || [],
+      state.tvo_kombrig_zvannya || "",
+      state.tvo_kombrig_pib || ""
+    );
+    fillSignatorySelect(
+      document.getElementById("tvo_kombat_select"),
+      state.kombat_options || [],
+      state.tvo_kombat_zvannya || "",
+      state.tvo_kombat_pib || ""
+    );
+    syncHiddenFromSelect(document.getElementById("tvo_kombrig_select"), "tvo_kombrig_zvannya", "tvo_kombrig_pib");
+    syncHiddenFromSelect(document.getElementById("tvo_kombat_select"), "tvo_kombat_zvannya", "tvo_kombat_pib");
   }
 
   async function loadSavedSignatoriesIfEmpty() {
@@ -268,32 +459,124 @@
       const r = await fetch("/api/vlk_signatories");
       if (!r.ok) return;
       const j = await r.json();
-      const fields = ["tvo_kombrig_zvannya", "tvo_kombrig_pib", "tvo_kombat_zvannya", "tvo_kombat_pib"];
-      fields.forEach((id) => {
-        const input = document.getElementById(id);
-        if (input && !input.value.trim() && j[id]) input.value = j[id];
-      });
+      applySignatoryState(j);
     } catch (_) {}
   }
 
-  if (saveSignatoriesBtn) saveSignatoriesBtn.addEventListener("click", saveSignatories);
-  document.addEventListener("DOMContentLoaded", loadSavedSignatoriesIfEmpty);
-
-
-  if (pibInput) {
-    pibInput.addEventListener("input", function () {
-      clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => searchPIB(pibInput.value), 300);
-    });
-    pibInput.addEventListener("keydown", handleKeyNavigation);
+  async function addSignatory() {
+    const msg = document.getElementById("add-signatory-msg");
+    const role = getTomValue("new_signatory_role");
+    const zvannya = String(getTomValue("new_signatory_zvannya") || "").trim();
+    const pib = String(getTomValue("new_signatory_pib") || "").trim();
+    if (!zvannya || !pib) {
+      msg.textContent = "Вкажіть звання та ПІБ";
+      msg.className = "small text-danger mt-2";
+      return;
+    }
+    try {
+      document.getElementById("add-signatory-btn").disabled = true;
+      const r = await fetch("/api/vlk_signatories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add_option",
+          role: role,
+          zvannya: zvannya,
+          pib: pib,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      applySignatoryState(j);
+      setTomValue("new_signatory_zvannya", "");
+      setTomValue("new_signatory_pib", "");
+      msg.textContent = "Підписанта додано і вибрано";
+      msg.className = "small text-success mt-2";
+    } catch (e) {
+      msg.textContent = "Не вдалося додати: " + e.message;
+      msg.className = "small text-danger mt-2";
+    } finally {
+      document.getElementById("add-signatory-btn").disabled = false;
+    }
   }
-  document.addEventListener("click", function (e) {
-    if (!pibInput || !pibSuggestions) return;
-    if (!pibInput.contains(e.target) && !pibSuggestions.contains(e.target)) hideSuggestions();
+
+  const addSignatoryBtn = document.getElementById("add-signatory-btn");
+  if (addSignatoryBtn) addSignatoryBtn.addEventListener("click", addSignatory);
+
+  if (reportTypeSelect) {
+    reportTypeSelect.addEventListener("change", syncReportTypeUi);
+    syncReportTypeUi();
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    initFormTomSelects(".col-lg-10", {
+      skipIds: [
+        "pib_nazivnyi",
+        "hospital",
+        "misce_napravlennya",
+        "likar",
+        "tvo_kombrig_zvannya",
+        "tvo_kombrig_pib",
+        "tvo_kombat_zvannya",
+        "tvo_kombat_pib",
+      ],
+      searchableIds: ["tvo_kombrig_select", "tvo_kombat_select"],
+      clearButtonIds: ["tvo_kombrig_select", "tvo_kombat_select"],
+      onChangeMap: {
+        tvo_kombrig_select: function () {
+          syncHiddenFromSelect(
+            document.getElementById("tvo_kombrig_select"),
+            "tvo_kombrig_zvannya",
+            "tvo_kombrig_pib"
+          );
+        },
+        tvo_kombat_select: function () {
+          syncHiddenFromSelect(
+            document.getElementById("tvo_kombat_select"),
+            "tvo_kombat_zvannya",
+            "tvo_kombat_pib"
+          );
+        },
+        report_type: function () {
+          syncReportTypeUi();
+        },
+      },
+    });
+
+    loadSavedSignatoriesIfEmpty();
+    syncReportTypeUi();
+    initPibTomSelect({
+      onSelect: showPibInfoAlert,
+      onClear: hidePibInfoAlert,
+    });
+    Promise.all([
+      initLpzTomSelect({
+        selectId: "hospital",
+        recentKey: "lpz_recent_hospital",
+        placeholder: "Почніть вводити назву ЛПЗ...",
+      }),
+      initLpzTomSelect({
+        selectId: "misce_napravlennya",
+        recentKey: "lpz_recent_misce",
+        placeholder: "Почніть вводити назву ЛПЗ...",
+      }),
+      initLpzTomSelect({
+        selectId: "likar",
+        listUrl: "/api/likar_specializations",
+        recentKey: "likar_spec_recent",
+        placeholder: "Почніть вводити спеціалізацію...",
+      }),
+    ]).then(function (instances) {
+      hospitalLpzTomSelect = instances[0] || null;
+      misceLpzTomSelect = instances[1] || null;
+      likarTomSelect = instances[2] || null;
+      syncReportTypeUi();
+    });
   });
 
   if (form && submitButton) {
     form.addEventListener("submit", function () {
+      flushTomInputs(form);
       if (form.checkValidity()) {
         showLoading();
         submitButton.disabled = true;
