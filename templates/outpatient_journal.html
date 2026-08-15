@@ -1,0 +1,971 @@
+{% extends "base.html" %}
+{% block title %}Амбулаторний журнал - Медичний пункт батальйону{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-11">
+      <div class="page-header text-center">
+        <h1><i class="fas fa-book-medical me-2"></i>Амбулаторний журнал</h1>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      {% if reminders %}
+      <div class="card mb-4 border-warning">
+        <div class="card-header bg-warning-subtle">
+          <strong><i class="fas fa-bell me-1"></i>Нагадування про завершення лікарняного</strong>
+          <span class="text-muted small ms-2">протягом {{ reminder_within }} дн.</span>
+        </div>
+        <ul class="list-group list-group-flush">
+          {% for r in reminders %}
+          <li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+              <strong>{{ r.pib }}</strong>
+              <span class="text-muted">· {{ r.treatment_title }}</span>
+              <div class="small">{{ r.kind_label }} до <strong>{{ r.end_on }}</strong> ({{ r.days_left_label }})</div>
+            </div>
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patient_treatment_detail', treatment_id=r.treatment_id) }}">Відкрити</a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if show_form %}
+      <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <h5 class="mh-section-title mb-0">
+            <i class="fas fa-pen"></i>
+            {% if edit.id %}Редагувати №{{ edit.id }}{% elif extend_mode|default(false) %}Продовження лікування{% else %}Нове звернення{% endif %}
+          </h5>
+          <a href="{% if return_treatment %}{{ url_for('patient_treatment_detail', treatment_id=return_treatment) }}{% else %}{{ url_for('outpatient_journal', q=pib_query or None, unit=unit_filter or None) }}{% endif %}" class="btn btn-sm btn-outline-secondary">Скасувати</a>
+        </div>
+        <div class="card-body">
+          <form id="outpatient-form" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="action" value="save" />
+            {% if edit.id %}
+            <input type="hidden" name="id" value="{{ edit.id }}" />
+            {% endif %}
+            {% if return_treatment %}
+            <input type="hidden" name="return_treatment" value="{{ return_treatment }}" />
+            {% endif %}
+            <div class="border rounded p-3 mb-3">
+              <div class="fw-semibold text-primary mb-3">1. Пацієнт</div>
+              <div class="row">
+              <div class="col-md-8 mb-3">
+                <label for="pib" class="form-label">Прізвище, ім’я, по-батькові</label>
+                <select id="pib" name="pib" required placeholder="Почніть вводити ПІБ...">
+                  {% if edit.pib %}
+                  <option value="{{ edit.pib }}" selected>{{ edit.pib }}</option>
+                  {% endif %}
+                </select>
+                <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
+              </div>
+              <div class="col-md-4 mb-3">
+                <label for="visit_date" class="form-label">Дата звернення</label>
+                <input type="text" class="form-control" id="visit_date" name="date"
+                  value="{{ edit.date or today_ui }}" placeholder="дд.мм.рррр" required />
+              </div>
+            </div>
+            <input type="hidden" id="rank_unit" name="rank_unit" value="{{ edit.rank_unit }}" />
+            <div class="mb-3">
+              <label for="treatment_id" class="form-label">Лікування</label>
+              <select id="treatment_id" name="treatment_id" class="form-select">
+                <option value="">— без прив'язки —</option>
+                {% if edit.treatment_id %}
+                <option value="{{ edit.treatment_id }}" selected>Поточне (#{{ edit.treatment_id }})</option>
+                {% endif %}
+                <option value="new">+ Нове лікування…</option>
+              </select>
+              <div class="mt-2 d-none" id="new-treatment-wrap">
+                <input type="text" class="form-control" id="new_treatment_title" name="new_treatment_title"
+                  placeholder="Назва лікування (напр. ГРВІ, люмбалгія)" />
+              </div>
+              <div class="form-text">Оберіть існуюче лікування пацієнта або створіть нове.</div>
+            </div>
+            </div>
+            <div class="border rounded p-3 mb-3">
+              <div class="fw-semibold text-primary mb-3">2. Дія</div>
+              <div class="row">
+                <div class="col-md-6 mb-3">
+                  <label for="care_type" class="form-label">Тип</label>
+                  <select id="care_type" name="care_type" class="form-select">
+                    <option value="">— оберіть тип —</option>
+                    {% for key, label in care_types.items() %}
+                    <option value="{{ key }}" {% if edit.care_type == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-6 mb-3 d-none" id="wa-event-wrap">
+                  <label for="wa_event" class="form-label" id="wa-event-label">Варіант</label>
+                  <select id="wa_event" name="wa_event" class="form-select"
+                          data-selected="{{ edit.wa_event or '' }}">
+                    <option value="">— оберіть —</option>
+                  </select>
+                </div>
+              </div>
+              <p class="form-text text-muted mb-3 d-none" id="action-hint">Оберіть тип дії — з’являться потрібні поля.</p>
+
+              <div class="mb-3 d-none" id="field-referral-wrap">
+                <label for="referral_to" class="form-label" id="referral-label">Ким консультований</label>
+                <select id="referral_to" name="referral_to" placeholder="Почніть вводити спеціалізацію...">
+                  {% if edit.referral_to %}
+                  <option value="{{ edit.referral_to }}" selected>{{ edit.referral_to }}</option>
+                  {% endif %}
+                </select>
+              </div>
+
+              <div class="mb-3 d-none" id="field-from-lpz-wrap">
+                <label for="from_lpz" class="form-label">Звідки переведений</label>
+                <select id="from_lpz" name="from_lpz" placeholder="Почніть вводити назву ЛПЗ...">
+                  {% if edit.from_lpz %}
+                  <option value="{{ edit.from_lpz }}" selected>{{ edit.from_lpz }}</option>
+                  {% endif %}
+                </select>
+              </div>
+
+              <div class="mb-3 d-none" id="field-lpz-wrap">
+                <label for="lpz" class="form-label" id="lpz-label">Де</label>
+                <select id="lpz" name="lpz" placeholder="Почніть вводити назву ЛПЗ...">
+                  {% if edit.lpz %}
+                  <option value="{{ edit.lpz }}" selected>{{ edit.lpz }}</option>
+                  {% endif %}
+                </select>
+              </div>
+
+              <div class="row">
+                <div class="col-md-4 mb-3 d-none" id="field-leave-start-wrap">
+                  <label for="leave_start" class="form-label" id="leave-start-label">Дата</label>
+                  <input type="text" class="form-control" id="leave_start" name="leave_start"
+                    value="{{ edit.leave_start }}" placeholder="дд.мм.рррр" />
+                </div>
+                <div class="col-md-4 mb-3 d-none" id="field-leave-end-wrap">
+                  <label for="leave_end" class="form-label" id="leave-end-label">по</label>
+                  <input type="text" class="form-control" id="leave_end" name="leave_end"
+                    value="{{ edit.leave_end }}" placeholder="дд.мм.рррр" />
+                </div>
+                <div class="col-md-4 mb-3 d-none" id="field-leave-days-wrap">
+                  <label for="leave_days" class="form-label">к-ть днів</label>
+                  <input type="number" min="1" class="form-control" id="leave_days" name="leave_days"
+                    value="{{ edit.leave_days }}" placeholder="7" />
+                </div>
+              </div>
+
+              <div class="mb-3" id="gemini-scan-wrap">
+                <label class="form-label" for="gemini-scan-file">Зчитати з фото / PDF (Gemini)</label>
+                <div class="d-flex flex-wrap gap-2">
+                  <input type="file" class="form-control" id="gemini-scan-file"
+                    accept="image/*,.pdf,.heic,.heif" multiple />
+                  <button type="button" class="btn btn-outline-primary flex-shrink-0" id="gemini-scan-btn">
+                    <i class="fas fa-wand-magic-sparkles me-1"></i>Зчитати
+                  </button>
+                </div>
+                <div class="form-text" id="gemini-scan-status">
+                  Фото виписки або консультативного висновку — заповнить діагноз і рекомендації.
+                </div>
+              </div>
+
+              <div class="mb-3 d-none" id="field-diagnosis-wrap">
+                <label for="diagnosis" class="form-label">Діагноз</label>
+                <textarea class="form-control" id="diagnosis" name="diagnosis" rows="3">{{ edit.diagnosis }}</textarea>
+              </div>
+
+              <div class="mb-3 d-none" id="field-exam-wrap">
+                <label for="exam_result" class="form-label" id="exam-label">Рекомендації</label>
+                <textarea class="form-control" id="exam_result" name="exam_result" rows="4"
+                  placeholder="Рекомендації після огляду">{{ edit.exam_result }}</textarea>
+              </div>
+
+              <div class="mb-0">
+                <label for="notes" class="form-label">Примітки</label>
+                <input type="text" class="form-control" id="notes" name="notes" value="{{ edit.notes }}" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-save me-1"></i>{% if edit.id %}Зберегти{% else %}Додати{% endif %}
+            </button>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="card mb-4">
+        <div class="card-body py-3 border-bottom">
+          <div class="d-flex flex-wrap align-items-end gap-2">
+            <form method="GET" class="d-flex flex-wrap align-items-end gap-2 flex-grow-1 m-0" id="journal-filter-form">
+              {% if show_form and edit.id %}
+              <input type="hidden" name="edit" value="{{ edit.id }}" />
+              {% elif show_form %}
+              <input type="hidden" name="new" value="1" />
+              {% endif %}
+              <input type="hidden" name="q" id="journal-q-value" value="{{ pib_query }}" />
+              <div style="min-width: 12rem; flex: 1 1 12rem;">
+                <label for="journal-q" class="form-label mb-0 small">ПІБ</label>
+                <select id="journal-q" placeholder="Пошук…">
+                  {% if pib_query %}
+                  <option value="{{ pib_query }}" selected>{{ pib_query }}</option>
+                  {% endif %}
+                </select>
+              </div>
+              <div style="min-width: 14rem; flex: 1 1 14rem;">
+                <label for="journal-unit" class="form-label mb-0 small">Підрозділ</label>
+                <select class="form-select" id="journal-unit" name="unit">
+                  <option value="">Усі</option>
+                  {% for u in unit_options %}
+                  <option value="{{ u }}" {% if unit_filter == u %}selected{% endif %}>{{ u }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </form>
+
+            {% if not show_form %}
+            <a href="{{ url_for('outpatient_journal', new=1, q=pib_query or None, unit=unit_filter or None) }}" class="btn btn-primary">
+              <i class="fas fa-plus me-1"></i>Звернення
+            </a>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card-body p-0">
+          {% if records %}
+          <div class="table-responsive mh-journal-wrap">
+            <table class="table table-hover mb-0 mh-journal-table">
+              <thead>
+                <tr>
+                  <th class="mh-col-num">№</th>
+                  <th class="mh-col-date">Дата</th>
+                  <th class="mh-col-pib">ПІБ</th>
+                  <th class="mh-col-diag">Діагноз</th>
+                  <th class="mh-col-lpz">ЛПЗ</th>
+                  <th class="mh-col-type">Тип</th>
+                  <th class="mh-col-period">з</th>
+                  <th class="mh-col-period">по</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in records %}
+                <tr>
+                  <td class="mh-col-num">{{ r.id }}</td>
+                  <td class="mh-col-date">{{ r.date }}</td>
+                  <td class="mh-col-pib">
+                    {% if r.patient_id %}
+                    <a href="{{ url_for('patient_card_detail', patient_id=r.patient_id) }}">{{ r.pib }}</a>
+                    {% else %}
+                    {{ r.pib }}
+                    {% endif %}
+                  </td>
+                  <td class="mh-col-diag mh-cell-clamp">
+                    {% if r.diagnosis %}
+                    <div class="mh-clamp" data-mh-clamp>
+                      <div class="mh-clamp-text">{{ r.diagnosis }}</div>
+                      <button type="button" class="btn btn-link btn-sm p-0 mh-clamp-toggle d-none" aria-expanded="false">Показати більше</button>
+                    </div>
+                    {% else %}<span class="text-muted">—</span>{% endif %}
+                  </td>
+                  <td class="mh-col-lpz">{{ r.lpz or '—' }}</td>
+                  <td class="mh-col-type">
+                    {% if r.care_type_label %}
+                    <span class="mh-type-badge">{{ r.care_type_label }}</span>
+                    {% if r.wa_event_label %}<span class="mh-type-event">{{ r.wa_event_label }}</span>{% endif %}
+                    {% else %}<span class="text-muted">—</span>{% endif %}
+                  </td>
+                  <td class="mh-col-period">
+                    {% if r.care_type in ('consultation', 'referral') %}
+                      {{ r.date or '—' }}
+                    {% else %}
+                      {{ r.leave_start or '—' }}
+                    {% endif %}
+                  </td>
+                  <td class="mh-col-period">
+                    {% if r.care_type in ('consultation', 'referral') %}
+                      —
+                    {% else %}
+                      {{ r.leave_end or '—' }}
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% elif journal_count == 0 %}
+          <p class="text-muted p-3 mb-0">Поки немає записів. Натисніть «Звернення», щоб додати перший.</p>
+          {% else %}
+          <p class="text-muted p-3 mb-0">Нічого не знайдено.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
+<link href="{{ url_for('static', filename='css/pib_tom_select.css') }}" rel="stylesheet" />
+<style>
+  #journal-filter-form .ts-wrapper { min-width: 12rem; }
+  .mh-journal-wrap {
+    border-radius: 0 0 var(--mh-radius, 0.85rem) var(--mh-radius, 0.85rem);
+  }
+  .mh-cell-clamp { vertical-align: middle; }
+  .mh-clamp-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.35;
+  }
+  .mh-clamp.is-open .mh-clamp-text {
+    display: block;
+    -webkit-line-clamp: unset;
+    overflow: visible;
+  }
+  .mh-clamp-toggle {
+    font-size: 0.78rem;
+    line-height: 1.2;
+    text-decoration: none;
+    color: var(--mh-primary, #0d8a8a);
+  }
+  .mh-clamp-toggle:hover { text-decoration: underline; }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lpz_tom_select.js') }}"></script>
+<script>
+  (function initTextClamps() {
+    document.querySelectorAll("[data-mh-clamp]").forEach((wrap) => {
+      const text = wrap.querySelector(".mh-clamp-text");
+      const btn = wrap.querySelector(".mh-clamp-toggle");
+      if (!text || !btn) return;
+      const needsClamp = text.scrollHeight > text.clientHeight + 1;
+      if (!needsClamp) return;
+      btn.classList.remove("d-none");
+      btn.addEventListener("click", () => {
+        const open = wrap.classList.toggle("is-open");
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        btn.textContent = open ? "Згорнути" : "Показати більше";
+      });
+    });
+  })();
+
+  (function initCareWaEvent() {
+    const careSel = document.getElementById("care_type");
+    const eventSel = document.getElementById("wa_event");
+    const wrap = document.getElementById("wa-event-wrap");
+    const hint = document.getElementById("action-hint");
+    if (!careSel || !eventSel || !wrap) return;
+    const map = {{ care_wa_events|tojson }};
+    const preferred = eventSel.getAttribute("data-selected") || "";
+
+    const els = {
+      referral: document.getElementById("field-referral-wrap"),
+      fromLpz: document.getElementById("field-from-lpz-wrap"),
+      lpz: document.getElementById("field-lpz-wrap"),
+      leaveStart: document.getElementById("field-leave-start-wrap"),
+      leaveEnd: document.getElementById("field-leave-end-wrap"),
+      leaveDays: document.getElementById("field-leave-days-wrap"),
+      diagnosis: document.getElementById("field-diagnosis-wrap"),
+      exam: document.getElementById("field-exam-wrap"),
+      referralLabel: document.getElementById("referral-label"),
+      lpzLabel: document.getElementById("lpz-label"),
+      leaveStartLabel: document.getElementById("leave-start-label"),
+      leaveEndLabel: document.getElementById("leave-end-label"),
+      examLabel: document.getElementById("exam-label"),
+      waEventLabel: document.getElementById("wa-event-label"),
+      leaveStartInput: document.getElementById("leave_start"),
+      leaveEndInput: document.getElementById("leave_end"),
+      leaveDaysInput: document.getElementById("leave_days"),
+      fromLpzInput: document.getElementById("from_lpz"),
+      visitDate: document.getElementById("visit_date"),
+    };
+
+    function show(el, on) {
+      if (!el) return;
+      el.classList.toggle("d-none", !on);
+    }
+
+    function setText(el, text) {
+      if (el) el.textContent = text;
+    }
+
+    function refillEvents() {
+      const kind = careSel.value || "";
+      const options = map[kind] || [];
+      const keep = eventSel.value || preferred;
+      eventSel.innerHTML = "";
+      const auto = document.createElement("option");
+      auto.value = "";
+      auto.textContent = options.length ? "— оберіть —" : "—";
+      eventSel.appendChild(auto);
+      options.forEach(function (pair) {
+        const opt = document.createElement("option");
+        opt.value = pair[0];
+        opt.textContent = pair[1];
+        if (pair[0] === keep) opt.selected = true;
+        eventSel.appendChild(opt);
+      });
+      show(wrap, options.length > 0);
+      if (!options.length) {
+        eventSel.value = "";
+      } else if (!eventSel.value) {
+        const openOpt = options.find(function (p) { return p[0] === "open"; });
+        if (openOpt) eventSel.value = openOpt[0];
+      }
+      if (kind === "inpatient") setText(els.waEventLabel, "Статус");
+      else if (kind === "outpatient" || kind === "day_hospital") setText(els.waEventLabel, "Варіант");
+      else setText(els.waEventLabel, "Варіант");
+    }
+
+    function syncActionFields() {
+      const kind = careSel.value || "";
+      const ev = eventSel.value || "";
+      const hasType = !!kind;
+
+      show(hint, !hasType);
+
+      // defaults off
+      show(els.referral, false);
+      show(els.fromLpz, false);
+      show(els.lpz, false);
+      show(els.leaveStart, false);
+      show(els.leaveEnd, false);
+      show(els.leaveDays, false);
+      show(els.diagnosis, false);
+      show(els.exam, false);
+
+      if (els.leaveStartInput) els.leaveStartInput.disabled = false;
+      if (els.leaveEndInput) els.leaveEndInput.disabled = false;
+      if (els.leaveDaysInput) els.leaveDaysInput.disabled = false;
+      if (els.fromLpzInput) els.fromLpzInput.disabled = true;
+
+      if (!hasType) return;
+
+      if (kind === "consultation" || kind === "referral") {
+        show(els.referral, true);
+        show(els.lpz, true);
+        show(els.diagnosis, true);
+        show(els.exam, true);
+        setText(els.referralLabel, kind === "referral" ? "До якого спеціаліста" : "Ким консультований");
+        setText(els.lpzLabel, kind === "referral" ? "Куди направлений" : "Де консультований");
+        setText(els.examLabel, "Рекомендації");
+        if (els.leaveStartInput) { els.leaveStartInput.value = ""; els.leaveStartInput.disabled = true; }
+        if (els.leaveEndInput) { els.leaveEndInput.value = ""; els.leaveEndInput.disabled = true; }
+        if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; els.leaveDaysInput.disabled = true; }
+        return;
+      }
+
+      if (kind === "vlk") {
+        show(els.leaveStart, true);
+        show(els.lpz, true);
+        setText(els.leaveStartLabel, "Дата початку");
+        setText(els.lpzLabel, "Місце проходження ВЛК");
+        if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
+          els.leaveStartInput.value = els.visitDate.value || "";
+        }
+        if (els.leaveEndInput) { els.leaveEndInput.value = ""; els.leaveEndInput.disabled = true; }
+        if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; els.leaveDaysInput.disabled = true; }
+        return;
+      }
+
+      if (kind === "outpatient" || kind === "day_hospital") {
+        show(els.lpz, true);
+        show(els.diagnosis, true);
+        show(els.exam, true);
+        setText(els.examLabel, "Рекомендації");
+        if (ev === "open") {
+          setText(els.lpzLabel, "Де відкрив");
+          show(els.leaveStart, true);
+          setText(els.leaveStartLabel, "Дата відкриття");
+          if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
+            els.leaveStartInput.value = els.visitDate.value || "";
+          }
+          if (els.leaveEndInput) els.leaveEndInput.disabled = true;
+          if (els.leaveDaysInput) els.leaveDaysInput.disabled = true;
+        } else if (ev === "extend") {
+          setText(els.lpzLabel, "Де продовжив");
+          show(els.leaveEnd, true);
+          setText(els.leaveEndLabel, "Дата по яке продовжив");
+          if (els.leaveEndInput && !els.leaveEndInput.value && els.visitDate) {
+            els.leaveEndInput.value = els.visitDate.value || "";
+          }
+          if (els.leaveStartInput) els.leaveStartInput.disabled = false;
+          if (els.leaveDaysInput) els.leaveDaysInput.disabled = true;
+        } else if (ev === "discharge") {
+          setText(els.lpzLabel, "Де завершив");
+          show(els.leaveEnd, true);
+          setText(els.leaveEndLabel, "Дата завершення");
+          if (els.leaveEndInput && !els.leaveEndInput.value && els.visitDate) {
+            els.leaveEndInput.value = els.visitDate.value || "";
+          }
+          if (els.leaveDaysInput) els.leaveDaysInput.disabled = true;
+        } else {
+          setText(els.lpzLabel, "Де");
+        }
+        return;
+      }
+
+      if (kind === "inpatient") {
+        show(els.diagnosis, true);
+        if (ev === "open") {
+          show(els.lpz, true);
+          show(els.leaveStart, true);
+          setText(els.lpzLabel, "Де госпіталізований");
+          setText(els.leaveStartLabel, "Коли");
+          if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
+            els.leaveStartInput.value = els.visitDate.value || "";
+          }
+          if (els.leaveEndInput) { els.leaveEndInput.disabled = true; }
+          if (els.leaveDaysInput) { els.leaveDaysInput.disabled = true; }
+        } else if (ev === "extend") {
+          show(els.fromLpz, true);
+          show(els.lpz, true);
+          show(els.leaveStart, true);
+          setText(els.lpzLabel, "Куди переведений");
+          setText(els.leaveStartLabel, "Дата переводу");
+          if (els.fromLpzInput) els.fromLpzInput.disabled = false;
+          if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
+            els.leaveStartInput.value = els.visitDate.value || "";
+          }
+          if (els.leaveEndInput) { els.leaveEndInput.value = ""; els.leaveEndInput.disabled = true; }
+          if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; els.leaveDaysInput.disabled = true; }
+        } else if (ev === "discharge") {
+          show(els.lpz, true);
+          setText(els.lpzLabel, "З якого закладу виписаний");
+          show(els.leaveStart, true);
+          show(els.leaveEnd, true);
+          show(els.leaveDays, true);
+          show(els.exam, true);
+          setText(els.leaveStartLabel, "Період з");
+          setText(els.leaveEndLabel, "по");
+          setText(els.examLabel, "Рекомендації");
+        } else {
+          show(els.lpz, true);
+          setText(els.lpzLabel, "ЛПЗ");
+        }
+        return;
+      }
+
+      // інші типи — загальний набір
+      show(els.lpz, true);
+      show(els.leaveStart, true);
+      show(els.leaveEnd, true);
+      show(els.leaveDays, true);
+      show(els.diagnosis, true);
+      show(els.exam, true);
+      setText(els.lpzLabel, "ЛПЗ");
+      setText(els.leaveStartLabel, "з");
+      setText(els.leaveEndLabel, "по");
+      setText(els.examLabel, "Рекомендації");
+    }
+
+    function syncAll() {
+      refillEvents();
+      syncActionFields();
+    }
+
+    careSel.addEventListener("change", function () {
+      if (careSel.value !== "inpatient" && els.fromLpzInput) {
+        if (els.fromLpzInput.tomselect) {
+          els.fromLpzInput.tomselect.clear(true);
+        } else {
+          els.fromLpzInput.value = "";
+        }
+      }
+      syncAll();
+    });
+    eventSel.addEventListener("change", syncActionFields);
+    syncAll();
+  })();
+
+  function showPibInfoAlert(item) {
+    const alertEl = document.getElementById("pib-info-alert");
+    const rankUnit = document.getElementById("rank_unit");
+    if (!alertEl) return;
+    const rank = (item && item.rank) ? String(item.rank).trim() : "";
+    const position = (item && item.position) ? String(item.position).trim() : "";
+    const parts = [];
+    if (rank) parts.push(rank);
+    if (position) parts.push(position);
+    if (!parts.length) {
+      alertEl.classList.add("d-none");
+      alertEl.textContent = "";
+      return;
+    }
+    alertEl.textContent = parts.join(" · ");
+    alertEl.classList.remove("d-none");
+    if (rankUnit) {
+      rankUnit.value = parts.join(", ");
+    }
+  }
+
+  function hidePibInfoAlert() {
+    const alertEl = document.getElementById("pib-info-alert");
+    if (!alertEl) return;
+    alertEl.classList.add("d-none");
+    alertEl.textContent = "";
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const outpatientForm = document.getElementById("outpatient-form");
+    if (outpatientForm) {
+      initFormTomSelects("#outpatient-form", {
+        skipIds: ["pib", "rank_unit", "diagnosis", "referral_to", "lpz", "notes", "treatment_id", "exam_result", "new_treatment_title", "care_type", "wa_event", "leave_start", "leave_end", "leave_days", "visit_date", "date", "gemini-scan-file"],
+      });
+      initPibTomSelect({
+        selectId: "pib",
+        context: "outpatient",
+        allowCreate: true,
+        placeholder: "Почніть вводити ПІБ (РКЧ → база лікувань)...",
+        onSelect: function (item) {
+          showPibInfoAlert(item);
+          loadTreatmentsForPib((item && item.value) || "");
+        },
+        onClear: function () {
+          hidePibInfoAlert();
+          loadTreatmentsForPib("");
+        },
+      });
+
+      function parseUaDate(raw) {
+        const s = String(raw || "").trim();
+        const m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+        if (!m) return null;
+        const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+        if (isNaN(d.getTime())) return null;
+        return d;
+      }
+      function formatUaDate(d) {
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        return dd + "." + mm + "." + d.getFullYear();
+      }
+      function syncLeaveDays() {
+        const startEl = document.getElementById("leave_start");
+        const endEl = document.getElementById("leave_end");
+        const daysEl = document.getElementById("leave_days");
+        if (!startEl || !endEl || !daysEl) return;
+        const start = parseUaDate(startEl.value);
+        const end = parseUaDate(endEl.value);
+        if (start && end) {
+          const a = start < end ? start : end;
+          const b = start < end ? end : start;
+          const days = Math.round((b - a) / 86400000) + 1;
+          if (days > 0) daysEl.value = String(days);
+        } else if (start && daysEl.value) {
+          const n = parseInt(daysEl.value, 10);
+          if (n > 0 && !endEl.value.trim()) {
+            const end = new Date(start.getTime());
+            end.setDate(end.getDate() + n - 1);
+            endEl.value = formatUaDate(end);
+          }
+        }
+      }
+      ["leave_start", "leave_end", "leave_days"].forEach(function (id) {
+        document.getElementById(id)?.addEventListener("change", syncLeaveDays);
+        document.getElementById(id)?.addEventListener("blur", syncLeaveDays);
+      });
+
+      const treatmentSelect = document.getElementById("treatment_id");
+      const newWrap = document.getElementById("new-treatment-wrap");
+      function syncNewTreatment() {
+        if (!treatmentSelect || !newWrap) return;
+        newWrap.classList.toggle("d-none", treatmentSelect.value !== "new");
+      }
+      treatmentSelect?.addEventListener("change", syncNewTreatment);
+      syncNewTreatment();
+
+      function loadTreatmentsForPib(pib) {
+        if (!treatmentSelect) return;
+        const keep = treatmentSelect.value;
+        const currentOpt = {% if edit.treatment_id %}String({{ edit.treatment_id }}){% else %}""{% endif %};
+        while (treatmentSelect.options.length > 2) {
+          // keep first (empty) and last (new) — rebuild simply
+          break;
+        }
+        const newOpt = Array.from(treatmentSelect.options).find(function (o) { return o.value === "new"; });
+        treatmentSelect.innerHTML = "";
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = "— без прив'язки —";
+        treatmentSelect.appendChild(empty);
+        if (!pib) {
+          const neu = document.createElement("option");
+          neu.value = "new";
+          neu.textContent = "+ Нове лікування…";
+          treatmentSelect.appendChild(neu);
+          syncNewTreatment();
+          return;
+        }
+        fetch("/api/patient_treatments?pib=" + encodeURIComponent(pib) + "&active_only=0")
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            let matched = false;
+            (data.results || []).forEach(function (t) {
+              const opt = document.createElement("option");
+              opt.value = String(t.id);
+              opt.textContent = t.label || t.title;
+              if (String(t.id) === keep || String(t.id) === currentOpt) {
+                opt.selected = true;
+                matched = true;
+              }
+              treatmentSelect.appendChild(opt);
+            });
+            if (!matched && currentOpt) {
+              const opt = document.createElement("option");
+              opt.value = currentOpt;
+              opt.textContent = "Поточне (#" + currentOpt + ")";
+              opt.selected = true;
+              treatmentSelect.appendChild(opt);
+            }
+            const neu = document.createElement("option");
+            neu.value = "new";
+            neu.textContent = "+ Нове лікування…";
+            if (keep === "new") neu.selected = true;
+            treatmentSelect.appendChild(neu);
+            syncNewTreatment();
+          })
+          .catch(function () {
+            const neu = document.createElement("option");
+            neu.value = "new";
+            neu.textContent = "+ Нове лікування…";
+            treatmentSelect.appendChild(neu);
+            syncNewTreatment();
+          });
+      }
+
+      const pibEl = document.getElementById("pib");
+      if (pibEl && pibEl.value) loadTreatmentsForPib(pibEl.value);
+      initLpzTomSelect({
+        selectId: "referral_to",
+        listUrl: "/api/likar_specializations",
+        recentKey: "likar_spec_recent",
+        placeholder: "Почніть вводити спеціалізацію...",
+      });
+      initLpzTomSelect({
+        selectId: "lpz",
+        listUrl: "/api/lpz_list",
+        recentKey: "lpz_recent_outpatient",
+        placeholder: "Почніть вводити назву ЛПЗ...",
+      });
+      initLpzTomSelect({
+        selectId: "from_lpz",
+        listUrl: "/api/lpz_list",
+        recentKey: "lpz_recent_outpatient_from",
+        placeholder: "Почніть вводити назву ЛПЗ...",
+      });
+
+      const scanBtn = document.getElementById("gemini-scan-btn");
+      const scanFile = document.getElementById("gemini-scan-file");
+      const scanStatus = document.getElementById("gemini-scan-status");
+      let pendingGeminiFiles = [];
+
+      function syncPendingGeminiInputs() {
+        outpatientForm.querySelectorAll('input[name="gemini_media"]').forEach(function (el) {
+          el.remove();
+        });
+        pendingGeminiFiles.forEach(function (file) {
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          const input = document.createElement("input");
+          input.type = "file";
+          input.name = "gemini_media";
+          input.className = "d-none";
+          input.files = dt.files;
+          outpatientForm.appendChild(input);
+        });
+      }
+
+      scanBtn?.addEventListener("click", function () {
+        const files = scanFile && scanFile.files ? Array.from(scanFile.files) : [];
+        if (!files.length) {
+          if (scanStatus) scanStatus.textContent = "Оберіть фото або PDF висновку.";
+          return;
+        }
+        pendingGeminiFiles = files.slice(0, 5);
+        syncPendingGeminiInputs();
+
+        const fd = new FormData();
+        pendingGeminiFiles.forEach(function (f) {
+          fd.append("files", f);
+        });
+        const tidEl = document.getElementById("treatment_id");
+        const tid = tidEl ? String(tidEl.value || "").trim() : "";
+        if (tid && tid !== "new") fd.append("treatment_id", tid);
+        const editId = outpatientForm.querySelector('input[name="id"]');
+        if (editId && editId.value) fd.append("visit_id", editId.value);
+
+        scanBtn.disabled = true;
+        if (scanStatus) scanStatus.textContent = "Зчитую документ…";
+        fetch("/api/extract_visit_text", { method: "POST", body: fd })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, json: j }; }); })
+          .then(function (res) {
+            if (!res.json || !res.json.ok) {
+              throw new Error((res.json && res.json.error) || "Помилка зчитування");
+            }
+            const diag = res.json.diagnosis || "";
+            const recs = res.json.recommendations || "";
+            const diagEl = document.getElementById("diagnosis");
+            const recEl = document.getElementById("exam_result");
+            if (diagEl && diag) diagEl.value = diag;
+            if (recEl && recs) recEl.value = recs;
+            document.getElementById("field-diagnosis-wrap")?.classList.remove("d-none");
+            document.getElementById("field-exam-wrap")?.classList.remove("d-none");
+            const parts = [];
+            if (diag) parts.push("діагноз");
+            if (recs) parts.push("рекомендації");
+            let status = parts.length
+              ? "Заповнено: " + parts.join(" і ") + ". Перевірте перед збереженням."
+              : "У документі не знайдено діагноз/рекомендації.";
+            if (res.json.media_saved) {
+              status += " Медіа збережено: " + res.json.media_saved + ".";
+              // уже збережено в лікування — не дублювати при submit
+              pendingGeminiFiles = [];
+              syncPendingGeminiInputs();
+            } else {
+              status += " Фото буде додано до медіа після збереження звернення.";
+            }
+            if (res.json.dropbox_synced) {
+              status += " Dropbox: " + res.json.dropbox_synced + ".";
+            }
+            if (scanStatus) scanStatus.textContent = status;
+          })
+          .catch(function (err) {
+            if (scanStatus) scanStatus.textContent = err.message || "Не вдалося зчитати.";
+          })
+          .finally(function () {
+            scanBtn.disabled = false;
+          });
+      });
+
+      outpatientForm.addEventListener("submit", function () {
+        if (typeof flushTomInputs === "function") flushTomInputs(outpatientForm);
+        syncPendingGeminiInputs();
+      });
+    }
+
+    const filterForm = document.getElementById("journal-filter-form");
+    const qSelect = document.getElementById("journal-q");
+    const qHidden = document.getElementById("journal-q-value");
+
+    function currentPibQuery(ts) {
+      const selected = ts && typeof ts.getValue === "function" ? String(ts.getValue() || "").trim() : "";
+      if (selected) return selected;
+      const typed = ts && ts.control_input ? String(ts.control_input.value || "").trim() : "";
+      return typed;
+    }
+
+    function submitJournalFilter(ts) {
+      if (!filterForm) return;
+      if (qHidden) qHidden.value = currentPibQuery(ts);
+      if (qSelect) qSelect.disabled = false;
+      filterForm.submit();
+    }
+
+    document.getElementById("journal-unit")?.addEventListener("change", function () {
+      submitJournalFilter(qSelect && qSelect.tomselect);
+    });
+
+    if (typeof TomSelect !== "undefined" && qSelect) {
+      let skipFilterSubmit = true;
+      const ts = new TomSelect(qSelect, {
+        valueField: "value",
+        labelField: "label",
+        searchField: ["label", "value"],
+        maxItems: 1,
+        maxOptions: 15,
+        create: function (input) {
+          const v = (input || "").trim();
+          return v ? { value: v, label: v } : false;
+        },
+        createOnBlur: false,
+        persist: false,
+        preload: false,
+        openOnFocus: true,
+        loadThrottle: 200,
+        placeholder: "Пошук…",
+        plugins: ["clear_button"],
+        shouldLoad: function (query) {
+          return (query || "").trim().length >= 1;
+        },
+        score: function () {
+          return function () {
+            return 1;
+          };
+        },
+        load: function (query, callback) {
+          const q = (query || "").trim();
+          if (!q) {
+            callback();
+            return;
+          }
+          const self = this;
+          fetch("/api/outpatient_pib?q=" + encodeURIComponent(q))
+            .then(function (r) {
+              if (!r.ok) throw new Error(String(r.status));
+              return r.json();
+            })
+            .then(function (data) {
+              const keep = String(self.getValue() || "").trim();
+              self.clearOptions();
+              if (keep) {
+                self.addOption({ value: keep, label: keep });
+              }
+              callback(data.results || []);
+            })
+            .catch(function () {
+              callback();
+            });
+        },
+        render: {
+          option: function (data, escape) {
+            return "<div>" + escape(data.label || data.value || "") + "</div>";
+          },
+          item: function (data, escape) {
+            return "<div>" + escape(data.value || data.label || "") + "</div>";
+          },
+          option_create: function (data, escape) {
+            return '<div class="create">Шукати «' + escape(data.input) + '»</div>';
+          },
+          no_results: function () {
+            return '<div class="no-results">Немає збігів</div>';
+          },
+        },
+        onChange: function (value) {
+          if (qHidden) qHidden.value = String(value || "").trim();
+          if (skipFilterSubmit) return;
+          submitJournalFilter(this);
+        },
+      });
+      skipFilterSubmit = false;
+      ts.control_input?.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const typed = String(this.value || "").trim();
+        if (typed && ts.getValue() !== typed) {
+          if (!ts.options[typed]) ts.addOption({ value: typed, label: typed });
+          skipFilterSubmit = true;
+          ts.setValue(typed, true);
+          skipFilterSubmit = false;
+        }
+        submitJournalFilter(ts);
+      });
+    }
+  });
+</script>
+{% endblock %}

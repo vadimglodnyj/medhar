@@ -1,7 +1,8 @@
 /**
  * Tom Select для пошуку ПІБ.
  * options:
- *   selectId, placeholder, context ('service' | '' для treatments),
+ *   selectId, placeholder,
+ *   context: 'service' | 'outpatient' | '' (treatments),
  *   allowCreate, shouldLoad(query), onSelect(item), onClear()
  */
 function initPibTomSelect(options) {

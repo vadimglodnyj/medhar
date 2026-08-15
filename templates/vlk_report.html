@@ -6,7 +6,7 @@
     <div class="col-lg-10">
       <div class="page-header text-center">
         <h1><i class="fas fa-file-lines me-2"></i>Рапорти</h1>
-        <p class="lead">ВЛК, госпіталізація, консультація, матдопомога, оздоровлення, відпустка</p>
+        <p class="lead">ВЛК, госпіталізація, консультація, реабілітація, матдопомога, оздоровлення, відпустка</p>
       </div>
 
       {% with messages = get_flashed_messages(with_categories=true) %}
@@ -34,6 +34,7 @@
                   <option value="vlk" {% if defaults.report_type == 'vlk' %}selected{% endif %}>Рапорт на ВЛК</option>
                   <option value="hospitalization" {% if defaults.report_type == 'hospitalization' %}selected{% endif %}>Рапорт на госпіталізацію</option>
                   <option value="consultation" {% if defaults.report_type == 'consultation' %}selected{% endif %}>Рапорт на консультацію</option>
+                  <option value="rehabilitation" {% if defaults.report_type == 'rehabilitation' %}selected{% endif %}>Рапорт на реабілітацію</option>
                   <option value="material_aid" {% if defaults.report_type == 'material_aid' %}selected{% endif %}>Рапорт на матеріальну допомогу</option>
                   <option value="ozdorovlennya" {% if defaults.report_type == 'ozdorovlennya' %}selected{% endif %}>Рапорт на оздоровлення</option>
                   <option value="vacation" {% if defaults.report_type == 'vacation' %}selected{% endif %}>Рапорт на відпустку</option>
@@ -62,6 +63,37 @@
               <div class="mb-3" id="hospitalization-date-wrap" style="display: none;">
                 <label for="data_gospitalizatsii" class="form-label">Дата госпіталізації</label>
                 <input type="text" id="data_gospitalizatsii" name="data_gospitalizatsii" class="form-control" value="{{ defaults.data_gospitalizatsii }}" placeholder="дд.мм.рррр" />
+              </div>
+              <hr />
+            </div>
+
+            <div id="rehabilitation-fields-wrap" style="display: none;">
+              <h6 class="mb-3">Реабілітація</h6>
+              <div class="row">
+                <div class="col-md-4 mb-3">
+                  <label for="rehab_mrc" class="form-label">МРЦ</label>
+                  <input
+                    type="text"
+                    id="rehab_mrc"
+                    name="rehab_mrc"
+                    class="form-control"
+                    value="{{ defaults.rehab_mrc or 'Пуща-Водиця' }}"
+                    placeholder="Пуща-Водиця"
+                  />
+                  <div class="form-text">У текст рапорту підставляється як «МРЦ «…»».</div>
+                </div>
+                <div class="col-md-4 mb-3">
+                  <label for="rehab_days" class="form-label">Тривалість (календарні дні)</label>
+                  <input
+                    type="number"
+                    id="rehab_days"
+                    name="rehab_days"
+                    class="form-control"
+                    value="{{ defaults.rehab_days or '21' }}"
+                    min="1"
+                    max="365"
+                  />
+                </div>
               </div>
               <hr />
             </div>
@@ -264,6 +296,9 @@
   const freeDodatokWrap = document.getElementById("free-dodatok-wrap");
   const dodatokSectionWrap = document.getElementById("dodatok-section-wrap");
   const vacationFieldsWrap = document.getElementById("vacation-fields-wrap");
+  const rehabilitationFieldsWrap = document.getElementById("rehabilitation-fields-wrap");
+  const rehabDaysInput = document.getElementById("rehab_days");
+  const rehabMrcInput = document.getElementById("rehab_mrc");
   const vacantionStartDayInput = document.getElementById("vacantion_start_day");
   const vacantionAdressInput = document.getElementById("vacantion_adress");
   const vacantionPhoneInput = document.getElementById("vacantion_phone");
@@ -305,6 +340,7 @@
     material_aid: "Створити рапорт на матеріальну допомогу",
     ozdorovlennya: "Створити рапорт на оздоровлення",
     vacation: "Створити рапорт на відпустку",
+    rehabilitation: "Створити рапорт на реабілітацію",
   };
 
   const freeDodatokTypes = {
@@ -339,6 +375,7 @@
     const isHospitalization = type === "hospitalization";
     const needsMisce = type === "hospitalization" || type === "consultation";
     const needsVacation = type === "vacation";
+    const needsRehabilitation = type === "rehabilitation";
     const needsFreeDodatok = !!freeDodatokTypes[type];
     const needsMedicalDodatok = !needsFreeDodatok && !needsVacation;
     const needsDodatokSection = needsMedicalDodatok || needsFreeDodatok;
@@ -374,6 +411,15 @@
 
     if (vacationFieldsWrap) {
       vacationFieldsWrap.style.display = needsVacation ? "block" : "none";
+    }
+    if (rehabilitationFieldsWrap) {
+      rehabilitationFieldsWrap.style.display = needsRehabilitation ? "block" : "none";
+    }
+    if (rehabDaysInput) {
+      rehabDaysInput.required = needsRehabilitation;
+    }
+    if (rehabMrcInput) {
+      rehabMrcInput.required = needsRehabilitation;
     }
     [vacantionStartDayInput, vacantionAdressInput, vacantionPhoneInput].forEach(function (el) {
       if (!el) return;

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Картотека пацієнтів - Медичний пункт батальйону{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-11">
+      <div class="page-header text-center">
+        <h1><i class="fas fa-folder-open me-2"></i>Картотека пацієнтів</h1>
+        <p class="text-muted mb-0">Картки військовослужбовців і історія лікувань</p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="card mb-4">
+        <div class="card-body py-3 border-bottom">
+          <div class="d-flex flex-wrap gap-2 align-items-end">
+            <form method="GET" class="d-flex flex-wrap gap-2 align-items-end flex-grow-1 m-0">
+              <div class="flex-grow-1" style="min-width: 14rem;">
+                <label class="form-label mb-0 small" for="cards-q">Пошук ПІБ</label>
+                <input type="text" class="form-control" id="cards-q" name="q" value="{{ pib_query }}" placeholder="Прізвище…" />
+              </div>
+              <button type="submit" class="btn btn-primary">Знайти</button>
+              {% if pib_query %}
+              <a href="{{ url_for('patient_cards') }}" class="btn btn-outline-secondary">Скинути</a>
+              {% endif %}
+            </form>
+            <form method="POST" class="m-0"
+                  onsubmit="return confirm('Створити картки на всіх в/с з кадрової бази (base.xlsx) і підтягнути телефон/категорію/ДН з бази лікувань?');">
+              <input type="hidden" name="action" value="sync_all_base" />
+              <button type="submit" class="btn btn-outline-primary">
+                <i class="fas fa-users me-1"></i>Створити картки з base.xlsx
+              </button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          {% if patients %}
+          <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>ПІБ</th>
+                  <th>Підрозділ</th>
+                  <th>Телефон</th>
+                  <th>Лікувань</th>
+                  <th>Активних</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for p in patients %}
+                <tr>
+                  <td>{{ p.pib }}</td>
+                  <td class="small">{{ p.unit_short or p.rank_unit or '—' }}</td>
+                  <td class="small">{{ p.phone or '—' }}</td>
+                  <td>{{ p.treatments_count }}</td>
+                  <td>{{ p.active_count }}</td>
+                  <td class="text-end">
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patient_card_detail', patient_id=p.id) }}">Картка</a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="text-muted p-3 mb-0">Поки немає пацієнтів у картотеці. Вони з’являться після звернень з прив’язкою до лікування.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

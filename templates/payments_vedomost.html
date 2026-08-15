@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Оплати / Відомість - Медичний пункт батальйону{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-12">
+      <div class="page-header text-center">
+        <h1><i class="fas fa-file-invoice-dollar me-2"></i>Оплати / Відомість</h1>
+        <p class="text-muted mb-0">
+          Неоплачені стаціонар, реабілітація та відпустка за бойовими діагнозами
+        </p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      {% if error %}
+      <div class="alert alert-warning">{{ error }}</div>
+      {% endif %}
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <form method="GET" class="row g-3 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label" for="month">Місяць відомості</label>
+              <select class="form-select" id="month" name="month">
+                {% set months = [
+                  (1,'січень'),(2,'лютий'),(3,'березень'),(4,'квітень'),
+                  (5,'травень'),(6,'червень'),(7,'липень'),(8,'серпень'),
+                  (9,'вересень'),(10,'жовтень'),(11,'листопад'),(12,'грудень')
+                ] %}
+                {% for num, title in months %}
+                <option value="{{ num }}" {% if num == month %}selected{% endif %}>{{ title }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label" for="year">Рік</label>
+              <input type="number" class="form-control" id="year" name="year" value="{{ year }}" min="2026" max="2100" />
+            </div>
+            <div class="col-md-7 d-flex flex-wrap gap-2">
+              <button type="submit" class="btn btn-primary">
+                <i class="fas fa-sync me-1"></i>Оновити прев’ю
+              </button>
+              <button type="submit" name="action" value="download" class="btn btn-success"
+                      {% if error or not vedomost_rows %}disabled{% endif %}>
+                <i class="fas fa-file-word me-1"></i>Завантажити DOCX
+              </button>
+            </div>
+          </form>
+          <p class="small text-muted mt-3 mb-0">
+            Лише підрозділи <strong>{{ unit_filter }}</strong>.
+            Джерело лікувань: <code>data/{{ treatments_source }}</code> (без злиття старих років).
+            Періоди рахуються з <strong>{{ history_start }}</strong>.
+            Без дати виписки в Excel період відкритий (для контакту з лікувальним закладом) —
+            у прев’ю позначено <span class="badge text-bg-warning">немає виписки</span>.
+            Дні в відомості за місяць — лише в межах обраного місяця (відпустка 01.07–06.08 → 31 день у липні).
+            Оплати — усі файли в <code>{{ payments_dir }}</code>.
+            У відомість потрапляють неоплачені періоди, що перетинають місяць, або «хвіст» попереднього
+            (з {{ carry_day }} числа).
+          </p>
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <div class="card h-100">
+            <div class="card-header py-2">
+              <strong>Файли оплат</strong>
+              <span class="text-muted small">({{ payment_files|length }})</span>
+            </div>
+            <div class="card-body py-2">
+              {% if payment_files %}
+              <ul class="mb-0 small">
+                {% for f in payment_files %}
+                <li><code>{{ f.filename }}</code> — {{ f.label }}</li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="text-warning mb-0 small">
+                Немає файлів у <code>data/payments/</code>. Додайте
+                <code>may_2026.xlsx</code> тощо.
+              </p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card h-100">
+            <div class="card-header py-2">
+              <strong>Патерни бойових діагнозів</strong>
+              <span class="text-muted small">({{ patterns|length }})</span>
+            </div>
+            <div class="card-body py-2">
+              <p class="small text-muted mb-2">
+                Редагуються у <code>data/combat_diagnosis_patterns.json</code>
+              </p>
+              <ul class="mb-0 small">
+                {% for p in patterns %}
+                <li><strong>{{ p.label }}</strong> — <code>{{ p.regex }}</code></li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>
+            <strong>Прев’ю неоплачених періодів</strong>
+            <span class="text-muted small">{{ preview_rows|length }} сегм. /
+              {{ vedomost_rows|length }} осіб у відомості</span>
+          </span>
+        </div>
+        <div class="card-body p-0">
+          {% if preview_rows %}
+          <div class="table-responsive" style="max-height: 28rem;">
+            <table class="table table-sm table-hover mb-0 align-middle">
+              <thead class="table-light sticky-top">
+                <tr>
+                  <th>ПІБ</th>
+                  <th>Підрозділ</th>
+                  <th>Тип</th>
+                  <th>З</th>
+                  <th>По</th>
+                  <th>Дні</th>
+                  <th></th>
+                  <th>Патерн</th>
+                  <th>Фрагмент діагнозу</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in preview_rows %}
+                <tr>
+                  <td class="small">{{ r.pib }}</td>
+                  <td class="small text-nowrap">{{ r.unit }}</td>
+                  <td class="small">{{ r.care_type }}</td>
+                  <td class="small text-nowrap">{{ r.start }}</td>
+                  <td class="small text-nowrap">{{ r.end }}</td>
+                  <td>{{ r.days }}</td>
+                  <td class="small">
+                    {% if r.missing_discharge %}
+                    <span class="badge text-bg-warning" title="Немає дати виписки в Excel">немає виписки</span>
+                    {% endif %}
+                  </td>
+                  <td><span class="badge text-bg-secondary">{{ r.pattern }}</span></td>
+                  <td class="small text-muted">{{ r.snippet }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="text-muted p-3 mb-0">
+            Неоплачених періодів за {{ month_ua }} {{ year }} не знайдено
+            (або всі вже покриті файлами оплат).
+          </p>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if matched_diagnoses %}
+      <div class="card mb-4">
+        <div class="card-header py-2">
+          <strong>Унікальні діагнози, що пройшли фільтр</strong>
+          <span class="text-muted small">(перевірка false positive)</span>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive" style="max-height: 16rem;">
+            <table class="table table-sm mb-0">
+              <thead class="table-light sticky-top">
+                <tr>
+                  <th>Патерн</th>
+                  <th>Діагноз</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for d in matched_diagnoses %}
+                <tr>
+                  <td class="small text-nowrap">{{ d.pattern }}</td>
+                  <td class="small">{{ d.diagnosis }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

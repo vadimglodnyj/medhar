@@ -19,7 +19,7 @@
       rel="stylesheet"
     />
     <link
-      href="{{ url_for('static', filename='css/medhar.css') }}?v=6"
+      href="{{ url_for('static', filename='css/medhar.css') }}?v=8"
       rel="stylesheet"
     />
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
@@ -62,6 +62,21 @@
             <li class="nav-item">
               <a class="nav-link" href="{{ url_for('vlk_report') }}">
                 <i class="fas fa-file-lines me-1"></i>Рапорти
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('outpatient_journal') }}">
+                <i class="fas fa-book-medical me-1"></i>Амбулаторний журнал
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('patient_cards') }}">
+                <i class="fas fa-folder-open me-1"></i>Картотека
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('payments_vedomost') }}">
+                <i class="fas fa-file-invoice-dollar me-1"></i>Оплати
               </a>
             </li>
           </ul>

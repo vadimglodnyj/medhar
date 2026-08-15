@@ -41,7 +41,20 @@ backup/
 *.log
 output/
 data/*.xlsx
+data/treatment_media/
 ukr.traineddata
+
+# Персональні дані пацієнтів / оплати — не комітити
+data/payments/
+data/*.db
+
+# Підписи та печатки — не комітити
+static/img/signature_*
+static/img/stamp_*
+
+# Тимчасові файли
+_tmp_*
+*.tmp
 
 # Database files
 *.db

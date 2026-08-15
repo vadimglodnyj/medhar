@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}{{ patient.pib }} - Картотека{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="row justify-content-center">
+    <div class="col-lg-10">
+      <div class="mb-3">
+        <a href="{{ url_for('patient_cards') }}" class="btn btn-sm btn-outline-secondary">
+          <i class="fas fa-arrow-left me-1"></i>До картотеки
+        </a>
+      </div>
+      <div class="page-header">
+        <h1>{{ patient.pib }}</h1>
+        <p class="text-muted mb-0">
+          {{ unit_line }}
+          {% if rank_and_category %} · {{ rank_and_category }}{% elif patient.rank %} · {{ patient.rank }}{% endif %}
+        </p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div class="card mb-4">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <h5 class="mb-0 mh-section-title"><i class="fas fa-id-card"></i>Дані військовослужбовця</h5>
+          <form method="POST" class="m-0">
+            <input type="hidden" name="action" value="sync_base" />
+            <button type="submit" class="btn btn-sm btn-outline-secondary">
+              <i class="fas fa-file-excel me-1"></i>Оновити з Excel
+            </button>
+          </form>
+        </div>
+        <div class="card-body">
+          <div class="row mb-3">
+            <div class="col-md-6">
+              <div class="small text-muted">Звання</div>
+              <div>{{ patient.rank or '—' }}</div>
+            </div>
+            <div class="col-md-6">
+              <div class="small text-muted">Підрозділ (скорочено)</div>
+              <div>{{ patient.unit_short or '—' }} <span class="text-muted">({{ unit_line }})</span></div>
+            </div>
+          </div>
+          <div class="mb-3">
+            <div class="small text-muted">Посада</div>
+            <div>{{ patient.position or '—' }}</div>
+          </div>
+          <form method="POST" id="patient-card-form">
+            <input type="hidden" name="action" value="save" />
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="birth_date">Дата народження</label>
+                <input type="text" class="form-control" id="birth_date" name="birth_date"
+                  value="{{ patient.birth_date or '' }}" placeholder="дд.мм.рррр" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="phone">Телефон</label>
+                <input type="text" class="form-control" id="phone" name="phone"
+                  value="{{ patient.phone or '' }}" placeholder="+380…" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="ipn">ІПН</label>
+                <input type="text" class="form-control" id="ipn" name="ipn"
+                  value="{{ patient.ipn or '' }}" placeholder="##########" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="service_category">Категорія</label>
+                <select class="form-select" id="service_category" name="service_category">
+                  <option value="">—</option>
+                  {% for key, label in service_category_options %}
+                  <option value="{{ key }}" {% if patient.service_category == key %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="enlistment_date">Дата призову на службу</label>
+                <input type="text" class="form-control" id="enlistment_date" name="enlistment_date"
+                  value="{{ patient.enlistment_date or '' }}" placeholder="дд.мм.рррр" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="komisariat">Яким військкоматом призваний</label>
+                <input type="text" class="form-control" id="komisariat" name="komisariat"
+                  value="{{ patient.komisariat or '' }}" placeholder="напр. ТЦК та СП м. …" />
+              </div>
+            </div>
+            {% if not patient.phone %}
+            <div class="alert alert-warning py-2 small">
+              Вкажіть телефон — він потрібен для тексту в WhatsApp і фабули на ВЛК.
+            </div>
+            {% endif %}
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-save me-1"></i>Зберегти
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mb-0 mh-section-title"><i class="fas fa-file-medical"></i>Фабула на ВЛК</h5>
+        </div>
+        <div class="card-body">
+          <form method="POST" id="vlk-fabula-form">
+            <input type="hidden" name="action" value="vlk_fabula" />
+            <div class="mb-3">
+              <label class="form-label" for="vlk_place">1. Місце проходження ВЛК</label>
+              <select id="vlk_place" name="vlk_place" class="form-select"
+                placeholder="Почніть вводити назву ЛПЗ...">
+              </select>
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label">2. Звання та категорія</label>
+                <input type="text" class="form-control" readonly
+                  value="{{ rank_and_category or '—' }}" />
+                <input type="hidden" name="service_category" value="{{ patient.service_category or '' }}" />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label">3. Повна посада</label>
+                <input type="text" class="form-control" readonly value="{{ patient.position or '' }}" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label">4. ПІБ</label>
+                <input type="text" class="form-control" readonly value="{{ patient.pib }}" />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label" for="fabula_birth_date">5. Дата народження</label>
+                <input type="text" class="form-control" id="fabula_birth_date" name="birth_date"
+                  value="{{ patient.birth_date or '' }}" placeholder="дд.мм.рррр" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label" for="fabula_enlistment_date">6. Дата призову на службу</label>
+                <input type="text" class="form-control" id="fabula_enlistment_date" name="enlistment_date"
+                  value="{{ patient.enlistment_date or '' }}" placeholder="дд.мм.рррр" />
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label" for="fabula_komisariat">7. Яким військкоматом призваний</label>
+                <input type="text" class="form-control" id="fabula_komisariat" name="komisariat"
+                  value="{{ patient.komisariat or '' }}" placeholder="ТЦК та СП…" />
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="fabula_diagnosis">8. Діагноз</label>
+              <textarea class="form-control" id="fabula_diagnosis" name="diagnosis" rows="3"
+                placeholder="Діагноз">{{ diagnosis_default }}</textarea>
+            </div>
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="fabula_ipn">9. ІПН</label>
+                <input type="text" class="form-control" id="fabula_ipn" name="ipn"
+                  value="{{ patient.ipn or '' }}" placeholder="##########" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="fabula_phone">10. Номер телефону</label>
+                <input type="text" class="form-control" id="fabula_phone" name="phone"
+                  value="{{ patient.phone or '' }}" placeholder="+380…" />
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label" for="referral_basis">11. Підстава направлення</label>
+                <select class="form-select" id="referral_basis" name="referral_basis" required>
+                  <option value="">— оберіть —</option>
+                  {% for key, label in referral_basis_options %}
+                  <option value="{{ key }}">{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-file-word me-1"></i>Створити фабулу (DOCX)
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0 mh-section-title"><i class="fas fa-notes-medical"></i>Лікування</h5>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('outpatient_journal', new=1, q=patient.pib) }}">
+            + Звернення
+          </a>
+        </div>
+        <div class="list-group list-group-flush">
+          {% for t in treatments %}
+          <a href="{{ url_for('patient_treatment_detail', treatment_id=t.id) }}"
+             class="list-group-item list-group-item-action">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <strong>{{ t.title }}</strong>
+                <span class="badge text-bg-{{ 'success' if t.status == 'active' else 'secondary' }} ms-1">{{ t.status_label }}</span>
+                <div class="small text-muted">
+                  з {{ t.started_on or '—' }}
+                  {% if t.closed_on %} · до {{ t.closed_on }}{% endif %}
+                  · {{ t.visits_count }} зверн.
+                  · {{ t.days_count }} дн. лікування
+                </div>
+              </div>
+              <i class="fas fa-chevron-right text-muted mt-1"></i>
+            </div>
+          </a>
+          {% else %}
+          <div class="list-group-item text-muted">Ще немає лікувань. Додайте звернення з «+ Нове лікування».</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
+<link href="{{ url_for('static', filename='css/pib_tom_select.css') }}" rel="stylesheet" />
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lpz_tom_select.js') }}"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    if (typeof initLpzTomSelect === "function") {
+      initLpzTomSelect({
+        selectId: "vlk_place",
+        listUrl: "/api/lpz_list",
+        recentKey: "lpz_recent_vlk_fabula",
+        placeholder: "Почніть вводити назву ЛПЗ...",
+      });
+    }
+    const form = document.getElementById("vlk-fabula-form");
+    form?.addEventListener("submit", function () {
+      if (typeof flushTomInputs === "function") flushTomInputs(form);
+    });
+  });
+</script>
+{% endblock %}
