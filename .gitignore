@@ -81,6 +81,15 @@ test_*.py
 .env.local
 .env.production
 .env.staging
+# Зашифрований пакет команди (збирається локально перед Install.exe)
+data/team.vault
+data/team_roster.json
+desktop/.team_pin
+**/team.env
 
 # Upload files
 uploads/
+# Local runtime
+session.json
+dist.zip
+

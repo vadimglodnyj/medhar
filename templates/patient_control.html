@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+{% block title %}Контроль пацієнтів — Медичний пункт батальйону{% endblock %}
+{% block content %}
+<div class="mh-shell">
+  <div class="page-header">
+    <h1><i class="fas fa-user-check me-2"></i>Контроль пацієнтів</h1>
+    <p class="text-muted mb-0">
+      Стаціонар (дзвінок медика після {{ call_threshold }} днів), поранені на лікуванні, направлення на поліклініку
+    </p>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+    {{ message }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item" role="presentation">
+      <a class="nav-link {% if tab == 'inpatient' %}active{% endif %}"
+         href="{{ url_for('patient_control', tab='inpatient') }}">
+        Стаціонар
+        {% if need_call %}
+        <span class="badge text-bg-danger ms-1">{{ need_call }}</span>
+        {% endif %}
+      </a>
+    </li>
+    <li class="nav-item" role="presentation">
+      <a class="nav-link {% if tab == 'wounded' %}active{% endif %}"
+         href="{{ url_for('patient_control', tab='wounded') }}">
+        Поранені
+        {% if wounded %}
+        <span class="badge text-bg-secondary ms-1">{{ wounded|length }}</span>
+        {% endif %}
+      </a>
+    </li>
+    <li class="nav-item" role="presentation">
+      <a class="nav-link {% if tab == 'polyclinic' %}active{% endif %}"
+         href="{{ url_for('patient_control', tab='polyclinic', poly_date=poly_date) }}">
+        Поліклініка
+        {% if tab == 'polyclinic' and polyclinic %}
+        <span class="badge text-bg-secondary ms-1">{{ polyclinic|length }}</span>
+        {% endif %}
+      </a>
+    </li>
+  </ul>
+
+  {% if tab == 'inpatient' %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <p class="mb-0 small text-muted">
+        Показуються люди з <strong>активним</strong> лікуванням, у яких останнє звернення «Стаціонарне»
+        ще без виписки. Дні рахуються від дати госпіталізації / переводу або від останнього
+        <strong>дзвінка медика</strong>. Якщо більше {{ call_threshold }} днів — потрібен дзвінок;
+        після збереження дати лічильник стартує знову для цього звернення.
+      </p>
+    </div>
+  </div>
+
+  {% if inpatients %}
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>ПІБ</th>
+            <th>ЛПЗ</th>
+            <th>Початок / дзвінок</th>
+            <th>Днів</th>
+            <th>Статус</th>
+            <th>Дзвінок медика</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in inpatients %}
+          <tr class="{% if r.needs_call %}mh-row-alert{% endif %}">
+            <td>
+              {% if r.patient_id %}
+              <a href="{{ url_for('patient_card_detail', patient_id=r.patient_id) }}">{{ r.pib }}</a>
+              {% else %}
+              {{ r.pib }}
+              {% endif %}
+              {% if r.treatment_id %}
+              <div class="small text-muted">
+                <a href="{{ url_for('patient_treatment_detail', treatment_id=r.treatment_id) }}">
+                  {{ r.treatment_title or 'Лікування' }}
+                </a>
+                {% if r.cause_label %} · {{ r.cause_label }}{% endif %}
+              </div>
+              {% endif %}
+              {% if r.phone %}
+              <div class="small text-muted">{{ r.phone }}</div>
+              {% endif %}
+            </td>
+            <td class="small">{{ r.lpz or '—' }}</td>
+            <td class="small">
+              <div>відлік: {{ r.anchor_date or '—' }}</div>
+              {% if r.leave_start and r.leave_start != r.anchor_date %}
+              <div class="text-muted">старт: {{ r.leave_start }}</div>
+              {% endif %}
+              {% if r.medic_call_date %}
+              <div class="text-muted">дзвінок: {{ r.medic_call_date }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <span class="fw-semibold {% if r.needs_call %}text-danger{% endif %}">{{ r.days_since }}</span>
+              {% if r.needs_call %}
+              <span class="badge text-bg-danger ms-1">дзвінок</span>
+              {% elif r.days_until_call == 0 %}
+              <span class="small text-muted d-block">завтра дзвінок</span>
+              {% else %}
+              <span class="small text-muted d-block">ще {{ r.days_until_call }} дн.</span>
+              {% endif %}
+            </td>
+            <td class="small">{{ r.wa_event_label }}</td>
+            <td style="min-width: 14rem;">
+              <form method="post" class="d-flex flex-wrap gap-2 align-items-end" data-no-loader>
+                <input type="hidden" name="action" value="medic_call" />
+                <input type="hidden" name="visit_id" value="{{ r.visit_id }}" />
+                <div>
+                  <label class="form-label small mb-0" for="call-{{ r.visit_id }}">Дата</label>
+                  <input
+                    type="text"
+                    class="form-control form-control-sm mh-date"
+                    id="call-{{ r.visit_id }}"
+                    name="medic_call_date"
+                    value="{{ today }}"
+                    placeholder="дд.мм.рррр"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    required
+                  />
+                </div>
+                <button type="submit" class="btn btn-sm {% if r.needs_call %}btn-danger{% else %}btn-outline-primary{% endif %}">
+                  Зафіксувати
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-light border mb-0">Зараз ніхто не на стаціонарі без виписки.</div>
+  {% endif %}
+
+  {% elif tab == 'wounded' %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <p class="mb-0 small text-muted">
+        Активні лікування з характером <strong>бойове</strong> (поранення).
+        Закриті епізоди сюди не потрапляють.
+      </p>
+    </div>
+  </div>
+
+  {% if wounded %}
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>ПІБ</th>
+            <th>Поранення</th>
+            <th>Лікування</th>
+            <th>Поточний тип</th>
+            <th>ЛПЗ / період</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in wounded %}
+          <tr>
+            <td>
+              {% if r.patient_id %}
+              <a href="{{ url_for('patient_card_detail', patient_id=r.patient_id) }}">{{ r.pib }}</a>
+              {% else %}
+              {{ r.pib }}
+              {% endif %}
+              <div class="small text-muted">{{ r.unit_short or r.rank_unit or '' }}</div>
+              {% if r.phone %}
+              <div class="small text-muted">{{ r.phone }}</div>
+              {% endif %}
+            </td>
+            <td class="small">
+              {{ r.injury_date or '—' }}
+              {% if r.injury_title %}
+              <div class="text-muted">{{ r.injury_title }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('patient_treatment_detail', treatment_id=r.treatment_id) }}">
+                {{ r.treatment_title or 'Лікування' }}
+              </a>
+              {% if r.started_on %}
+              <div class="small text-muted">з {{ r.started_on }}</div>
+              {% endif %}
+            </td>
+            <td class="small">{{ r.current_care_label }}</td>
+            <td class="small">
+              {{ r.current_lpz or '—' }}
+              {% if r.current_leave_start or r.current_leave_end %}
+              <div class="text-muted">
+                {{ r.current_leave_start or '…' }} — {{ r.current_leave_end or '…' }}
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-light border mb-0">Немає активних бойових лікувань.</div>
+  {% endif %}
+
+  {% elif tab == 'polyclinic' %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end" id="poly-filter">
+        <input type="hidden" name="tab" value="polyclinic" />
+        <div class="col-md-4">
+          <label class="form-label" for="poly_date">Дата направлення</label>
+          <input
+            type="text"
+            class="form-control mh-date"
+            id="poly_date"
+            name="poly_date"
+            value="{{ poly_date }}"
+            placeholder="дд.мм.рррр"
+            inputmode="numeric"
+            autocomplete="off"
+            required
+          />
+        </div>
+        <div class="col-md-8 d-flex flex-wrap gap-2">
+          <button type="submit" class="btn btn-primary">Показати список</button>
+        </div>
+      </form>
+      <form method="post" class="mt-2" data-no-loader>
+        <input type="hidden" name="action" value="polyclinic_letter" />
+        <input type="hidden" name="poly_date" value="{{ poly_date }}" />
+        <button type="submit" class="btn btn-success" {% if not polyclinic %}disabled{% endif %}>
+          <i class="fas fa-file-word me-1"></i>Лист «Поліклініка {{ poly_date }}»
+        </button>
+      </form>
+      <p class="small text-muted mt-3 mb-0">
+        У список потрапляють звернення з типом <strong>Направлення на консультацію</strong>,
+        у яких дата звернення збігається з обраною.
+      </p>
+    </div>
+  </div>
+
+  {% if polyclinic %}
+  <div class="card">
+    <div class="card-header py-2 d-flex justify-content-between align-items-center">
+      <strong>Поліклініка {{ poly_date }}</strong>
+      <span class="text-muted small">{{ polyclinic|length }} осіб</span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>ПІБ</th>
+            <th>Спеціаліст</th>
+            <th>Діагноз</th>
+            <th>ЛПЗ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in polyclinic %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td>
+              {% if r.patient_id %}
+              <a href="{{ url_for('patient_card_detail', patient_id=r.patient_id) }}">{{ r.pib }}</a>
+              {% else %}
+              {{ r.pib }}
+              {% endif %}
+              <div class="small text-muted">{{ r.unit_short or r.rank_unit or '' }}</div>
+            </td>
+            <td class="small">{{ r.referral_to or '—' }}</td>
+            <td class="small">{{ r.diagnosis or '—' }}</td>
+            <td class="small">{{ r.lpz or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-light border mb-0">
+    Немає направлень на консультацію за {{ poly_date }}.
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

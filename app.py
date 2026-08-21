@@ -10,9 +10,10 @@ import tempfile
 import threading
 import json
 import time
-import sqlite3
+import subprocess
 import pandas as pd
 from flask import Flask, render_template, request, send_file, make_response, flash, jsonify, redirect, url_for
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from docxtpl import DocxTemplate
@@ -38,20 +39,259 @@ from utils.ukrainian_pib_genitive import (
     format_nominative_pib_display,
     nominative_pib_to_genitive_line,
 )
+from utils import db_cache
 from utils import patient_cards_db as cards_db
+from utils import team_tasks_db as tasks_db
+from utils.db_backend import backend_name as db_backend_name
+from utils.db_backend import connect as db_connect
+from utils.db_backend import is_locked_error, retry_if_locked
+from utils import team_vault
+from utils import sync_schema
+from utils.sync_schema import (
+    ensure_sync_schema,
+    enqueue_outbox,
+    new_sync_id,
+    not_deleted_sql,
+    sync_enabled,
+    utc_now,
+)
+import config as app_config
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    template_folder=TEMPLATES_DIR,
+    static_folder=STATIC_DIR,
+)
 app.secret_key = SECRET_KEY
 
 # Порожня папка даних — щоб користувач міг одразу покласти Excel
 try:
     os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(EXCEL_DATA_DIR, exist_ok=True)
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    os.makedirs(TREATMENT_MEDIA_DIR, exist_ok=True)
+    os.makedirs(PAYMENTS_DIR, exist_ok=True)
 except OSError:
     pass
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info(
+    "Medhar storage | Excel=%s | journal=%s | mode=%s",
+    EXCEL_DATA_DIR,
+    db_backend_name(),
+    SESSION_MODE or "unset",
+)
+
+
+def _sync_path_globals() -> None:
+    """Після зміни режиму оновлює шляхи, що були зафіксовані при імпорті."""
+    global BASE_PERSONNEL_FILE, RKCH_PERSONNEL_FILE
+    global SERVICE_SIGNATORIES_FILE, VLK_SIGNATORIES_FILE
+    BASE_PERSONNEL_FILE = os.path.join(EXCEL_DATA_DIR, "base.xlsx")
+    RKCH_PERSONNEL_FILE = os.path.join(EXCEL_DATA_DIR, "rkch.xlsx")
+    SERVICE_SIGNATORIES_FILE = os.path.join(DATA_DIR, "service_signatories.json")
+    VLK_SIGNATORIES_FILE = os.path.join(DATA_DIR, "vlk_signatories.json")
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(EXCEL_DATA_DIR, exist_ok=True)
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        os.makedirs(TREATMENT_MEDIA_DIR, exist_ok=True)
+        os.makedirs(PAYMENTS_DIR, exist_ok=True)
+    except OSError:
+        pass
+
+
+def _reset_db_runtime_state() -> None:
+    """Скидає одноразові прапорці схеми й кеш списків після зміни backend."""
+    global _outpatient_schema_ready
+    global treatments_cache, cache_timestamp, treatments_cache_file_signature
+    global base_personnel_cache, base_personnel_index, base_cache_file_signature
+    global rkch_personnel_index, rkch_cache_file_signature
+    _outpatient_schema_ready = False
+    cards_db._schema_ready = False
+    tasks_db._schema_ready = False
+    sync_schema._sync_schema_ready = False
+    db_cache.invalidate_all()
+    treatments_cache = None
+    cache_timestamp = None
+    treatments_cache_file_signature = None
+    base_personnel_cache = None
+    base_personnel_index = None
+    base_cache_file_signature = None
+    rkch_personnel_index = None
+    rkch_cache_file_signature = None
+    try:
+        from utils import dropbox_sync
+
+        dropbox_sync.reset_client()
+    except Exception:
+        pass
+
+
+def _apply_unlocked_secrets(secrets: dict) -> dict:
+    """Пише team.env, оновлює os.environ і runtime-конфіг. Повертає статус Excel."""
+    sub = (secrets.get("MEDHAR_EXCEL_SUBPATH") or "").strip()
+    excel_dir = team_vault.resolve_excel_dir(sub) if sub else ""
+    for key, value in secrets.items():
+        if key == "MEDHAR_EXCEL_SUBPATH":
+            continue
+        os.environ[key] = value or ""
+    if excel_dir:
+        os.environ["MEDHAR_EXCEL_DIR"] = excel_dir
+    os.environ["MEDHAR_MODE"] = "team"
+
+    team_vault.write_team_env(
+        team_vault.team_env_path(USER_DATA_ROOT),
+        secrets,
+        excel_dir=excel_dir or "",
+    )
+    team_vault.write_session(team_vault.session_path(USER_DATA_ROOT), "team")
+    app_config.refresh_runtime_config()
+    # Підхопити оновлені імена з модуля config у цей namespace (from config import *)
+    for name in (
+        "DATA_DIR",
+        "EXCEL_DATA_DIR",
+        "TEMP_DIR",
+        "MEDHAR_MODE",
+        "TURSO_DATABASE_URL",
+        "TURSO_AUTH_TOKEN",
+        "USE_TURSO",
+        "USE_TURSO_SYNC",
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
+        "WHATSAPP_ACCESS_TOKEN",
+        "WHATSAPP_PHONE_NUMBER_ID",
+        "WHATSAPP_RECIPIENT",
+        "WHATSAPP_API_VERSION",
+        "DROPBOX_ACCESS_TOKEN",
+        "DROPBOX_APP_KEY",
+        "DROPBOX_APP_SECRET",
+        "DROPBOX_REFRESH_TOKEN",
+        "DROPBOX_ROOT_FOLDER",
+        "SESSION_MODE",
+        "NEEDS_TEAM_UNLOCK",
+        "HAS_TEAM_VAULT",
+        "TREATMENTS_FINAL_FILE",
+        "OUTPATIENT_JOURNAL_DB",
+        "TREATMENT_MEDIA_DIR",
+        "PAYMENTS_DIR",
+    ):
+        globals()[name] = getattr(app_config, name)
+    _sync_path_globals()
+    _reset_db_runtime_state()
+    logger.info(
+        "Team unlock | Excel=%s | journal=%s",
+        EXCEL_DATA_DIR,
+        db_backend_name(),
+    )
+    try:
+        from utils.journal_sync import start_daemon
+
+        start_daemon()
+    except Exception:
+        logger.debug("Sync daemon start skipped", exc_info=True)
+    return {
+        "excel_dir": excel_dir or "",
+        "excel_ok": bool(excel_dir and os.path.isdir(excel_dir)),
+        "excel_subpath": sub,
+    }
+
+
+def _apply_local_mode() -> None:
+    team_vault.clear_team_files(USER_DATA_ROOT)
+    team_vault.write_session(team_vault.session_path(USER_DATA_ROOT), "local")
+    for key in team_vault.TEAM_SECRET_KEYS:
+        os.environ.pop(key, None)
+    os.environ.pop("MEDHAR_EXCEL_DIR", None)
+    os.environ["MEDHAR_MODE"] = "local"
+    # Прибрати Turso з процесу (локальний SQLite)
+    os.environ["TURSO_DATABASE_URL"] = ""
+    os.environ["TURSO_AUTH_TOKEN"] = ""
+    app_config.refresh_runtime_config()
+    for name in (
+        "DATA_DIR",
+        "EXCEL_DATA_DIR",
+        "TEMP_DIR",
+        "MEDHAR_MODE",
+        "TURSO_DATABASE_URL",
+        "TURSO_AUTH_TOKEN",
+        "USE_TURSO",
+        "USE_TURSO_SYNC",
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
+        "DROPBOX_ACCESS_TOKEN",
+        "DROPBOX_APP_KEY",
+        "DROPBOX_APP_SECRET",
+        "DROPBOX_REFRESH_TOKEN",
+        "DROPBOX_ROOT_FOLDER",
+        "SESSION_MODE",
+        "NEEDS_TEAM_UNLOCK",
+        "HAS_TEAM_VAULT",
+        "TREATMENTS_FINAL_FILE",
+        "OUTPATIENT_JOURNAL_DB",
+        "TREATMENT_MEDIA_DIR",
+        "PAYMENTS_DIR",
+    ):
+        globals()[name] = getattr(app_config, name)
+    _sync_path_globals()
+    _reset_db_runtime_state()
+    logger.info("Local mode | Excel=%s | journal=%s", EXCEL_DATA_DIR, db_backend_name())
+
+
+@app.context_processor
+def _inject_session_mode():
+    sync_status = {}
+    injury_cert_pending = 0
+    inpatient_call_pending = 0
+    try:
+        from utils.journal_sync import get_status
+
+        sync_status = get_status()
+    except Exception:
+        pass
+    if not NEEDS_TEAM_UNLOCK:
+        try:
+            injury_cert_pending = len(cards_db.list_missing_injury_certs())
+        except Exception:
+            injury_cert_pending = 0
+        try:
+            inpatient_call_pending = cards_db.count_inpatients_needing_medic_call()
+        except Exception:
+            inpatient_call_pending = 0
+    return {
+        "session_mode": SESSION_MODE,
+        "has_team_vault": HAS_TEAM_VAULT,
+        "needs_team_unlock": NEEDS_TEAM_UNLOCK,
+        "sync_status": sync_status,
+        "injury_cert_pending": injury_cert_pending,
+        "inpatient_call_pending": inpatient_call_pending,
+    }
+
+
+@app.before_request
+def _gate_team_unlock():
+    if not NEEDS_TEAM_UNLOCK:
+        return None
+    endpoint = request.endpoint or ""
+    if endpoint in ("team_login", "team_unlock", "static") or endpoint.startswith("static"):
+        return None
+    if request.path.startswith("/static/"):
+        return None
+    return redirect(url_for("team_login"))
+
+
+@app.errorhandler(Exception)
+def _log_unhandled_exception(error):
+    """У вікні desktop немає консолі — traceback має потрапити у лог-файл."""
+    if isinstance(error, HTTPException):
+        return error
+    logger.exception("Необроблена помилка на %s", request.path)
+    if app.debug:
+        # У дев-режимі корисніший інтерактивний traceback Werkzeug.
+        raise error
+    return "Внутрішня помилка сервера. Деталі — у файлі логів Medhar.", 500
 
 # Глобальна змінна для кешування даних
 treatments_cache = None
@@ -63,8 +303,8 @@ treatments_load_in_progress = False
 treatments_last_load_error = None
 SERVICE_SIGNATORIES_FILE = os.path.join(DATA_DIR, "service_signatories.json")
 VLK_SIGNATORIES_FILE = os.path.join(DATA_DIR, "vlk_signatories.json")
-BASE_PERSONNEL_FILE = os.path.join(DATA_DIR, "base.xlsx")
-RKCH_PERSONNEL_FILE = os.path.join(DATA_DIR, "rkch.xlsx")
+BASE_PERSONNEL_FILE = os.path.join(EXCEL_DATA_DIR, "base.xlsx")
+RKCH_PERSONNEL_FILE = os.path.join(EXCEL_DATA_DIR, "rkch.xlsx")
 
 # Кеш base.xlsx: DataFrame + індекс ПІБ → дані (для швидкого автокомпліту)
 base_personnel_cache = None
@@ -249,16 +489,16 @@ def _row_full_name(row) -> str:
 
 
 def list_treatments_year_files_sorted():
-    """Усі `treatments_YYYY.xlsx` у DATA_DIR, відсортовані за роком зростання."""
-    if not os.path.isdir(DATA_DIR):
+    """Усі `treatments_YYYY.xlsx` у EXCEL_DATA_DIR, за роком зростання."""
+    if not os.path.isdir(EXCEL_DATA_DIR):
         return []
     found = []
-    for name in os.listdir(DATA_DIR):
+    for name in os.listdir(EXCEL_DATA_DIR):
         m = TREATMENTS_YEAR_FILE_RE.match(name)
         if not m:
             continue
         year = int(m.group(1))
-        path = os.path.join(DATA_DIR, name)
+        path = os.path.join(EXCEL_DATA_DIR, name)
         if os.path.isfile(path):
             found.append((year, path))
     found.sort(key=lambda x: x[0])
@@ -267,7 +507,7 @@ def list_treatments_year_files_sorted():
 
 def treatments_path_for_year(year: int) -> str:
     """Шлях до файлу бази за конкретний рік (для завантаження / відображення)."""
-    return os.path.join(DATA_DIR, f"treatments_{int(year)}.xlsx")
+    return os.path.join(EXCEL_DATA_DIR, f"treatments_{int(year)}.xlsx")
 
 
 def _treatments_excel_file_signature():
@@ -347,7 +587,7 @@ def _load_treatments_data_unlocked():
         has_final = os.path.exists(TREATMENTS_FINAL_FILE)
         if not year_files and not has_final:
             raise FileNotFoundError(
-                f"У папці {DATA_DIR!r} немає файлів treatments_YYYY.xlsx і немає treatments_final.xlsx"
+                f"У папці {EXCEL_DATA_DIR!r} немає файлів treatments_YYYY.xlsx і немає treatments_final.xlsx"
             )
 
         logger.info(
@@ -590,7 +830,7 @@ def _format_komisariat_and_date(raw_value: str) -> str:
 def _format_komisariat_parts(komisariat: str, data_pryzovu: str) -> str:
     """Збирає рядок комісаріату з окремих полів форми."""
     komisariat = _normalize_spaces(komisariat).rstrip(' ,.;:')
-    data_pryzovu = _normalize_spaces(data_pryzovu)
+    data_pryzovu = normalize_ua_date(_normalize_spaces(data_pryzovu))
     if not komisariat or not data_pryzovu:
         return ""
     if not validate_date_format(data_pryzovu):
@@ -1228,6 +1468,96 @@ def load_rkch_personnel_index() -> dict:
         return rkch_personnel_index
 
 
+def _search_patient_cards_results(q_clean: str, limit: int = 10) -> list:
+    """Автокомпліт за картотекою: це найпріоритетніше джерело."""
+    if not q_clean:
+        return []
+    patients = cards_db.list_patients(q_clean)
+    prefix_hits = []
+    contains_hits = []
+    for patient in patients:
+        full_name = _normalize_spaces(patient.get("pib") or "")
+        pib_clean = full_name.casefold()
+        if not pib_clean:
+            continue
+        if pib_clean.startswith(q_clean):
+            prefix_hits.append(patient)
+        elif q_clean in pib_clean:
+            contains_hits.append(patient)
+
+    results = []
+    for patient in (prefix_hits + contains_hits)[:limit]:
+        full_name = _normalize_spaces(patient.get("pib") or "")
+        rank = _normalize_spaces(patient.get("rank") or "")
+        unit = _normalize_spaces(patient.get("unit_short") or "")
+        position = _normalize_spaces(patient.get("position") or "")
+        if unit:
+            position = f"{position} ({unit})" if position else unit
+        # Старі картки могли мати звання/підрозділ лише в rank_unit.
+        if not rank and not position:
+            position = _normalize_spaces(patient.get("rank_unit") or "")
+        label = f"{full_name} ({rank})" if rank else full_name
+        sur, first, pat = _split_pib(full_name)
+        results.append({
+            "label": f"{label} · картотека",
+            "value": full_name,
+            "rank": rank,
+            "position": position,
+            "prizvyshche": sur,
+            "imya": first,
+            "po_batkovi": pat,
+            "birth_date": patient.get("birth_date") or "",
+            "unit_short": unit,
+            "source": "card",
+            "patient_id": patient.get("id"),
+        })
+    return results
+
+
+def _search_base_results(q_clean: str, limit: int = 10) -> list:
+    """Автокомпліт за base.xlsx: спочатку prefix, потім contains."""
+    index = load_base_personnel_index()
+    if not index or not q_clean:
+        return []
+    prefix_hits = []
+    contains_hits = []
+    for pib_clean, person in index.items():
+        if not pib_clean:
+            continue
+        if pib_clean.startswith(q_clean):
+            prefix_hits.append(person)
+        elif q_clean in pib_clean:
+            contains_hits.append(person)
+
+    results = []
+    for person in (prefix_hits + contains_hits)[:limit]:
+        sur = person.get("prizvyshche") or ""
+        first = person.get("imya") or ""
+        pat = person.get("po_batkovi") or ""
+        full_name = _normalize_spaces(f"{sur} {first} {pat}")
+        if not full_name:
+            continue
+        rank = _normalize_spaces(person.get("zvanie") or "")
+        unit = _normalize_spaces(person.get("unit_short") or "")
+        position = _normalize_spaces(person.get("zaimana_posada") or "")
+        if unit:
+            position = f"{position} ({unit})" if position else unit
+        label = f"{full_name} ({rank})" if rank else full_name
+        results.append({
+            "label": f"{label} · base",
+            "value": full_name,
+            "rank": rank,
+            "position": position,
+            "prizvyshche": sur,
+            "imya": first,
+            "po_batkovi": pat,
+            "birth_date": person.get("birth_date") or "",
+            "unit_short": unit,
+            "source": "base",
+        })
+    return results
+
+
 def _search_rkch_results(q_clean: str, limit: int = 10) -> list:
     """Автокомпліт за rkch.xlsx: спочатку prefix, потім contains."""
     index = load_rkch_personnel_index()
@@ -1284,7 +1614,7 @@ def _search_treatments_results(q_clean: str, limit: int = 10) -> list:
     ):
         return []
     matched = treatments_df[
-        treatments_df["ПІБ_чисте"].str.contains(q_clean, na=False)
+        treatments_df["ПІБ_чисте"].str.contains(q_clean, na=False, regex=False)
     ]
     if matched.empty:
         return []
@@ -1344,6 +1674,20 @@ def _lookup_person_in_base_excel(pib_nazivnyi: str) -> dict:
     if not target_clean:
         return empty
     person = load_base_personnel_index().get(target_clean)
+    if not person:
+        return empty
+    merged = dict(empty)
+    merged.update(person)
+    return merged
+
+
+def _lookup_person_in_rkch_excel(pib_nazivnyi: str) -> dict:
+    """Точний пошук у rkch.xlsx; використовується, якщо людини немає в base."""
+    empty = _empty_base_person()
+    target = _normalize_spaces(pib_nazivnyi).casefold()
+    if not target:
+        return empty
+    person = load_rkch_personnel_index().get(target)
     if not person:
         return empty
     merged = dict(empty)
@@ -1414,6 +1758,29 @@ def _sync_patient_from_base(patient_id: int, pib: str = "", *, overwrite: bool =
     return changed
 
 
+def _sync_patient_from_rkch(patient_id: int, pib: str = "", *, overwrite: bool = False) -> bool:
+    """Підтягує кадрові поля з rkch.xlsx, якщо людини немає в base.xlsx."""
+    patient = cards_db.get_patient(patient_id)
+    if not patient:
+        return False
+    lookup_pib = pib or patient.get("pib") or ""
+    person = _lookup_person_in_rkch_excel(lookup_pib)
+    if not any(
+        person.get(k)
+        for k in (
+            "zvanie",
+            "zaimana_posada",
+            "unit_short",
+            "birth_date",
+            "service_category",
+        )
+    ):
+        return False
+    return cards_db.apply_base_fields_to_patient(
+        patient_id, person, overwrite=overwrite
+    )
+
+
 def _sync_patient_from_treatments(patient_id: int, pib: str = "", *, overwrite: bool = False) -> bool:
     """Підтягує телефон / категорію / ДН з Бази лікувань."""
     patient = cards_db.get_patient(patient_id)
@@ -1427,9 +1794,27 @@ def _sync_patient_from_treatments(patient_id: int, pib: str = "", *, overwrite: 
 
 
 def _sync_patient_card(patient_id: int, pib: str = "", *, overwrite: bool = False) -> bool:
-    """Повний sync картки: кадрова база + база лікувань."""
-    changed = _sync_patient_from_base(patient_id, pib, overwrite=overwrite)
-    changed = _sync_patient_from_treatments(patient_id, pib, overwrite=overwrite) or changed
+    """Sync картки: base → rkch; treatments доповнює медичні/контактні поля."""
+    lookup_pib = pib
+    if not lookup_pib:
+        patient = cards_db.get_patient(patient_id)
+        lookup_pib = (patient or {}).get("pib") or ""
+
+    # Кадрове джерело обирається строго за пріоритетом.
+    if any(_lookup_person_in_base_excel(lookup_pib).values()):
+        changed = _sync_patient_from_base(
+            patient_id, lookup_pib, overwrite=overwrite
+        )
+    else:
+        changed = _sync_patient_from_rkch(
+            patient_id, lookup_pib, overwrite=overwrite
+        )
+    changed = (
+        _sync_patient_from_treatments(
+            patient_id, lookup_pib, overwrite=overwrite
+        )
+        or changed
+    )
     return changed
 
 
@@ -1623,22 +2008,35 @@ def _replace_vlk_highlights(doc: DocxDocument, values):
                 extra.text = ""
             idx += 1
 
+def normalize_ua_date(date_string: str) -> str:
+    """Нормалізує дату до дд.мм.рррр (також з 22082026 або 22-08-2026)."""
+    raw = _normalize_spaces(date_string) if date_string else ""
+    if not raw:
+        return ""
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 8:
+        return f"{digits[0:2]}.{digits[2:4]}.{digits[4:8]}"
+    return raw
+
+
 def validate_date_format(date_string):
-    """Валідує формат дати дд.мм.рррр"""
+    """Валідує дату дд.мм.рррр: день 1–31, місяць 1–12, рік 1900–2200."""
     if not date_string:
         return True
-    
+
+    date_string = normalize_ua_date(date_string)
     pattern = r'^\d{2}\.\d{2}\.\d{4}$'
     if not re.match(pattern, date_string):
         return False
-    
+
     try:
         day, month, year = map(int, date_string.split('.'))
-        if month < 1 or month > 12 or day < 1 or day > 31:
+        if day < 1 or day > 31:
             return False
-        if year < 1900 or year > datetime.now().year:
+        if month < 1 or month > 12:
             return False
-        # Перевіряємо чи дата існує
+        if year < 1900 or year > 2200:
+            return False
         datetime(year, month, day)
         return True
     except ValueError:
@@ -1894,7 +2292,7 @@ def treatments_upload():
     if year < 1990 or year > 2100:
         return jsonify({'ok': False, 'error': 'Некоректний рік (1990–2100)'}), 400
 
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(EXCEL_DATA_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
     tmp_path = None
     try:
@@ -1919,7 +2317,7 @@ def treatments_upload():
             return jsonify({'ok': False, 'error': err_msg}), 400
 
         dest = treatments_path_for_year(year)
-        staging = os.path.join(DATA_DIR, f'.treatments_{year}.upload.tmp.xlsx')
+        staging = os.path.join(EXCEL_DATA_DIR, f'.treatments_{year}.upload.tmp.xlsx')
         with _treatments_load_lock:
             shutil.copyfile(tmp_path, staging)
             os.replace(staging, dest)
@@ -1985,7 +2383,7 @@ def base_upload():
     if not up.filename.lower().endswith('.xlsx'):
         return jsonify({'ok': False, 'error': 'Допускається лише розширення .xlsx'}), 400
 
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(EXCEL_DATA_DIR, exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
     tmp_path = None
     try:
@@ -2018,7 +2416,7 @@ def base_upload():
         if not ok:
             return jsonify({'ok': False, 'error': err_msg}), 400
 
-        staging = os.path.join(DATA_DIR, '.base.upload.tmp.xlsx')
+        staging = os.path.join(EXCEL_DATA_DIR, '.base.upload.tmp.xlsx')
         with _base_load_lock:
             shutil.copyfile(tmp_path, staging)
             os.replace(staging, BASE_PERSONNEL_FILE)
@@ -2216,6 +2614,18 @@ def api_lpz_list():
         return jsonify([])
 
 
+@app.route('/api/tcc_options', methods=['GET'])
+def api_tcc_options():
+    """ТЦК та СП для автокомпліту: готові рядки в орудному + регіон у родовому."""
+    try:
+        from utils.tcc_directory import load_options
+
+        return jsonify(load_options())
+    except Exception as e:
+        logger.warning("Не вдалося зчитати %s: %s", "all_tcc_ukraine.json", e)
+        return jsonify([])
+
+
 @app.route('/api/likar_specializations', methods=['GET'])
 def api_likar_specializations():
     """Список спеціалізацій лікаря (родовий відмінок) для рапортів."""
@@ -2287,8 +2697,31 @@ def search_pib():
                 })
             return jsonify({'results': results})
 
-        # Амбулаторний журнал / нове звернення: спочатку rkch.xlsx, інакше treatments.
-        if context_mode in ("outpatient", "rkch"):
+        # Нове звернення: картотека → base.xlsx → rkch.xlsx → treatments.
+        # Одна людина показується лише з найпріоритетнішого джерела.
+        if context_mode == "outpatient":
+            results = []
+            seen = set()
+            for search_source in (
+                _search_patient_cards_results,
+                _search_base_results,
+                _search_rkch_results,
+                _search_treatments_results,
+            ):
+                source_results = search_source(q_clean, limit=10)
+                for item in source_results:
+                    key = _normalize_spaces(item.get("value") or "").casefold()
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    results.append(item)
+                    if len(results) >= 10:
+                        break
+                if len(results) >= 10:
+                    break
+            return jsonify({'results': results})
+
+        if context_mode == "rkch":
             results = _search_rkch_results(q_clean, limit=10)
             if not results:
                 results = _search_treatments_results(q_clean, limit=10)
@@ -2301,21 +2734,97 @@ def search_pib():
         logger.error(f"Помилка при пошуку ПІБ: {e}")
         return jsonify({'results': [], 'error': str(e)})
 
-def _welcome_template_context():
-    """Контекст вітальної сторінки: чи є Excel у data/."""
-    has_files = bool(list_treatments_year_files_sorted()) or os.path.isfile(
-        TREATMENTS_FINAL_FILE
+
+@app.route("/team-login", methods=["GET"])
+def team_login():
+    """Вибір режиму: локально або команда (PIN)."""
+    change = request.args.get("change", "").strip() in ("1", "true", "yes")
+    if SESSION_MODE and not change and not NEEDS_TEAM_UNLOCK:
+        return redirect(url_for("index"))
+    dropbox_root = team_vault.find_dropbox_root() or ""
+    return render_template(
+        "team_login.html",
+        has_vault=HAS_TEAM_VAULT,
+        current_mode=SESSION_MODE,
+        dropbox_found=bool(dropbox_root),
+        dropbox_root=dropbox_root,
+        change_mode=change,
     )
-    return {
-        "data_ready": has_files,
-        "data_dir": os.path.abspath(DATA_DIR),
-    }
+
+
+@app.route("/team-unlock", methods=["POST"])
+def team_unlock():
+    """Локальний режим або розшифрування пакету команди PIN-ом."""
+    action = _normalize_spaces(request.form.get("action") or "")
+    wants_json = (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or "application/json" in (request.headers.get("Accept") or "").lower()
+    )
+
+    def _ok(payload: dict, code: int = 200):
+        if wants_json:
+            return jsonify({"ok": True, **payload}), code
+        flash(payload.get("message") or "Готово.", "success")
+        return redirect(url_for("index"))
+
+    def _err(message: str, code: int = 400):
+        if wants_json:
+            return jsonify({"ok": False, "error": message}), code
+        flash(message, "error")
+        return redirect(url_for("team_login", change=1))
+
+    if action == "local":
+        _apply_local_mode()
+        return _ok({
+            "mode": "local",
+            "message": "Локальний режим: журнал і Excel на цьому ПК.",
+            "redirect": url_for("index"),
+        })
+
+    if action != "team":
+        return _err("Невідома дія.")
+
+    if not HAS_TEAM_VAULT:
+        return _err(
+            "У цій збірці немає пакету команди (team.vault). "
+            "Зверніться до адміністратора або працюйте локально."
+        )
+
+    pin = request.form.get("pin") or ""
+    if len(str(pin).strip()) < 4:
+        return _err("Введіть PIN команди (щонайменше 4 символи).")
+
+    try:
+        vault = team_vault.load_vault_file(
+            team_vault.vault_path(RESOURCE_ROOT)
+        )
+        secrets = team_vault.decrypt_vault(vault, str(pin).strip())
+    except ValueError as e:
+        return _err(str(e), 403)
+    except OSError as e:
+        logger.exception("Читання team.vault")
+        return _err(f"Не вдалося прочитати пакет команди: {e}", 500)
+
+    status = _apply_unlocked_secrets(secrets)
+    msg = "Режим команди активний: спільний журнал і Dropbox."
+    if status.get("excel_subpath") and not status.get("excel_ok"):
+        msg += (
+            " Папку Excel у Dropbox не знайдено — перевірте, що клієнт Dropbox "
+            "синхронізує «Програми/patientss/data»."
+        )
+    return _ok({
+        "mode": "team",
+        "message": msg,
+        "excel_dir": status.get("excel_dir") or "",
+        "excel_ok": bool(status.get("excel_ok")),
+        "redirect": url_for("index"),
+    })
 
 
 @app.route('/', methods=['GET'])
 def index():
-    """Вітальна сторінка з інструкцією щодо data/ та встановлення."""
-    return render_template('welcome.html', **_welcome_template_context())
+    """Домашня сторінка — гайд команди по розділах програми."""
+    return render_template('welcome.html')
 
 
 @app.route('/databases', methods=['GET'])
@@ -2345,11 +2854,11 @@ def medical_characteristic():
         pib_rodovyi_input = request.form.get('pib_rodovyi', '').strip()
         hide_diagnosis_flag = request.form.get('no_diagnosis')
         enlistment_date = request.form.get('enlistment_date', '').strip()
-        enlistment_date_custom = request.form.get('enlistment_date_custom', '').strip()
+        enlistment_date_custom = normalize_ua_date(request.form.get('enlistment_date_custom', '').strip())
         observation_end = request.form.get('observation_end', '').strip()
-        observation_end_custom = request.form.get('observation_end_custom', '').strip()
+        observation_end_custom = normalize_ua_date(request.form.get('observation_end_custom', '').strip())
         signatory = request.form.get('signatory', '').strip()
-        birth_date = request.form.get('birth_date', '').strip()
+        birth_date = normalize_ua_date(request.form.get('birth_date', '').strip())
 
         # Обробка дати призову
         if enlistment_date == "custom":
@@ -3153,6 +3662,7 @@ OUTPATIENT_COLUMNS = [
     "leave_start",
     "leave_end",
     "leave_days",
+    "vlk_passed",
 ]
 
 # У шаблоні книги клітинки злиті: індекси перших унікальних tc у рядку.
@@ -3284,19 +3794,42 @@ _OUTPATIENT_SEED = [
 ]
 
 
-def _outpatient_db_connect() -> sqlite3.Connection:
+# Схема журналу створюється один раз на процес (див. _outpatient_init_db).
+_outpatient_schema_ready = False
+
+
+def _outpatient_db_connect():
     os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(OUTPATIENT_JOURNAL_DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db_connect()
+
+
+def _trigger_journal_sync() -> None:
+    if not sync_enabled():
+        return
+    try:
+        from utils.journal_sync import notify_local_change
+
+        notify_local_change()
+    except Exception:
+        logger.debug("Journal sync trigger skipped", exc_info=True)
 
 
 def _outpatient_init_db() -> None:
-    """Створює таблицю; міграція/тестові дані — лише при першому створенні файлу БД."""
+    """
+    Створює таблицю; міграція/тестові дані — лише при першому створенні файлу БД.
+
+    Схема стабільна, тому перевіряємо її один раз на процес: у Turso кожен
+    statement — окремий мережевий запит.
+    """
+    global _outpatient_schema_ready
+    if _outpatient_schema_ready:
+        return
     os.makedirs(DATA_DIR, exist_ok=True)
+    # Хмарну БД не засіваємо демо-даними; team mode = local-first + sync.
     first_create = not os.path.isfile(OUTPATIENT_JOURNAL_DB)
     conn = _outpatient_db_connect()
     try:
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS outpatient_entries (
@@ -3312,7 +3845,10 @@ def _outpatient_init_db() -> None:
                 visit_type TEXT NOT NULL DEFAULT '',
                 mkx10 TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                sync_id TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                deleted_at TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -3322,7 +3858,10 @@ def _outpatient_init_db() -> None:
                 "ALTER TABLE outpatient_entries ADD COLUMN lpz TEXT NOT NULL DEFAULT ''"
             )
         conn.commit()
+        tasks_db.ensure_team_tasks_schema(conn)
         cards_db.ensure_card_schema(conn)
+        ensure_sync_schema(conn)
+        _outpatient_schema_ready = True
         # Не засівати знову після повного очищення журналу користувачем.
         if not first_create:
             return
@@ -3479,21 +4018,39 @@ def list_outpatient_units() -> list:
     return list(_OUTPATIENT_CANONICAL_UNITS)
 
 
+def count_outpatient_entries() -> int:
+    """Загальна кількість записів журналу (потрібна лише щоб відрізнити
+    порожній журнал від порожнього результату фільтра)."""
+    return len(_all_outpatient_rows_asc())
+
+
+def _all_outpatient_rows_asc() -> list:
+    """Усі записи журналу (зростання id) — кешується, викликач копіює."""
+
+    def load() -> list:
+        _outpatient_init_db()
+        conn = _outpatient_db_connect()
+        try:
+            rows = conn.execute(
+                f"SELECT * FROM outpatient_entries WHERE {not_deleted_sql()} ORDER BY id ASC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    return db_cache.get_or_load(db_cache.JOURNAL_ROWS, load)
+
+
 def list_outpatient_entries(
     order_desc: bool = True,
     pib_query: str = "",
     unit: str = "",
 ) -> list:
-    _outpatient_init_db()
-    order = "DESC" if order_desc else "ASC"
-    conn = _outpatient_db_connect()
-    try:
-        rows = conn.execute(
-            f"SELECT * FROM outpatient_entries ORDER BY id {order}"
-        ).fetchall()
-        records = [dict(r) for r in rows]
-    finally:
-        conn.close()
+    cached = _all_outpatient_rows_asc()
+    # Копії, бо викликач додає в записи поля для шаблону.
+    records = [dict(r) for r in cached]
+    if order_desc:
+        records.reverse()
     # SQLite NOCASE/LOWER не працює для кирилиці — фільтр у Python.
     q = _normalize_spaces(pib_query).casefold()
     if q:
@@ -3591,46 +4148,62 @@ def get_outpatient_entry(entry_id) -> dict | None:
 
 def insert_outpatient_entry(payload: dict) -> int:
     _outpatient_init_db()
-    conn = _outpatient_db_connect()
-    try:
-        tid = payload.get("treatment_id")
+
+    def _write() -> int:
+        conn = _outpatient_db_connect()
         try:
-            tid_val = int(tid) if tid not in (None, "") else None
-        except (TypeError, ValueError):
-            tid_val = None
-        cur = conn.execute(
-            """
-            INSERT INTO outpatient_entries
-            (date, pib, rank_unit, diagnosis, referral_to, lpz, exam_result,
-             duty_exempt_days, visit_type, mkx10, notes, treatment_id,
-             care_type, from_lpz, leave_start, leave_end, leave_days, wa_event)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.get("date", ""),
-                payload.get("pib", ""),
-                payload.get("rank_unit", ""),
-                payload.get("diagnosis", ""),
-                payload.get("referral_to", ""),
-                payload.get("lpz", ""),
-                payload.get("exam_result", ""),
-                payload.get("duty_exempt_days", ""),
-                payload.get("visit_type", ""),
-                payload.get("mkx10", ""),
-                payload.get("notes", ""),
-                tid_val,
-                payload.get("care_type", ""),
-                payload.get("from_lpz", ""),
-                payload.get("leave_start", ""),
-                payload.get("leave_end", ""),
-                payload.get("leave_days", ""),
-                payload.get("wa_event", ""),
-            ),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-    finally:
-        conn.close()
+            conn.execute("PRAGMA foreign_keys = ON")
+            tid = payload.get("treatment_id")
+            try:
+                tid_val = int(tid) if tid not in (None, "") else None
+            except (TypeError, ValueError):
+                tid_val = None
+            sid = new_sync_id()
+            ts = utc_now()
+            cur = conn.execute(
+                """
+                INSERT INTO outpatient_entries
+                (date, pib, rank_unit, diagnosis, referral_to, lpz, exam_result,
+                 duty_exempt_days, visit_type, mkx10, notes, treatment_id,
+                 care_type, from_lpz, leave_start, leave_end, leave_days, wa_event,
+                 vlk_passed, sync_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload.get("date", ""),
+                    payload.get("pib", ""),
+                    payload.get("rank_unit", ""),
+                    payload.get("diagnosis", ""),
+                    payload.get("referral_to", ""),
+                    payload.get("lpz", ""),
+                    payload.get("exam_result", ""),
+                    payload.get("duty_exempt_days", ""),
+                    payload.get("visit_type", ""),
+                    payload.get("mkx10", ""),
+                    payload.get("notes", ""),
+                    tid_val,
+                    payload.get("care_type", ""),
+                    payload.get("from_lpz", ""),
+                    payload.get("leave_start", ""),
+                    payload.get("leave_end", ""),
+                    payload.get("leave_days", ""),
+                    payload.get("wa_event", ""),
+                    payload.get("vlk_passed", ""),
+                    sid,
+                    ts,
+                ),
+            )
+            eid = int(cur.lastrowid)
+            enqueue_outbox(conn, "outpatient_entries", sid, "upsert")
+            conn.commit()
+            db_cache.invalidate_all()
+            return eid
+        finally:
+            conn.close()
+
+    eid = int(retry_if_locked(_write))
+    _trigger_journal_sync()
+    return eid
 
 
 def update_outpatient_entry(entry_id, payload: dict) -> bool:
@@ -3639,49 +4212,72 @@ def update_outpatient_entry(entry_id, payload: dict) -> bool:
         eid = int(entry_id)
     except (TypeError, ValueError):
         return False
-    conn = _outpatient_db_connect()
-    try:
-        tid = payload.get("treatment_id")
+
+    def _write() -> bool:
+        conn = _outpatient_db_connect()
         try:
-            tid_val = int(tid) if tid not in (None, "") else None
-        except (TypeError, ValueError):
-            tid_val = None
-        cur = conn.execute(
-            """
-            UPDATE outpatient_entries SET
-                date = ?, pib = ?, rank_unit = ?, diagnosis = ?,
-                referral_to = ?, lpz = ?, exam_result = ?, duty_exempt_days = ?,
-                visit_type = ?, mkx10 = ?, notes = ?, treatment_id = ?,
-                care_type = ?, from_lpz = ?, leave_start = ?, leave_end = ?, leave_days = ?,
-                wa_event = ?
-            WHERE id = ?
-            """,
-            (
-                payload.get("date", ""),
-                payload.get("pib", ""),
-                payload.get("rank_unit", ""),
-                payload.get("diagnosis", ""),
-                payload.get("referral_to", ""),
-                payload.get("lpz", ""),
-                payload.get("exam_result", ""),
-                payload.get("duty_exempt_days", ""),
-                payload.get("visit_type", ""),
-                payload.get("mkx10", ""),
-                payload.get("notes", ""),
-                tid_val,
-                payload.get("care_type", ""),
-                payload.get("from_lpz", ""),
-                payload.get("leave_start", ""),
-                payload.get("leave_end", ""),
-                payload.get("leave_days", ""),
-                payload.get("wa_event", ""),
-                eid,
-            ),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
+            conn.execute("PRAGMA foreign_keys = ON")
+            tid = payload.get("treatment_id")
+            try:
+                tid_val = int(tid) if tid not in (None, "") else None
+            except (TypeError, ValueError):
+                tid_val = None
+            ts = utc_now()
+            cur = conn.execute(
+                """
+                UPDATE outpatient_entries SET
+                    date = ?, pib = ?, rank_unit = ?, diagnosis = ?,
+                    referral_to = ?, lpz = ?, exam_result = ?, duty_exempt_days = ?,
+                    visit_type = ?, mkx10 = ?, notes = ?, treatment_id = ?,
+                    care_type = ?, from_lpz = ?, leave_start = ?, leave_end = ?, leave_days = ?,
+                    wa_event = ?, vlk_passed = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload.get("date", ""),
+                    payload.get("pib", ""),
+                    payload.get("rank_unit", ""),
+                    payload.get("diagnosis", ""),
+                    payload.get("referral_to", ""),
+                    payload.get("lpz", ""),
+                    payload.get("exam_result", ""),
+                    payload.get("duty_exempt_days", ""),
+                    payload.get("visit_type", ""),
+                    payload.get("mkx10", ""),
+                    payload.get("notes", ""),
+                    tid_val,
+                    payload.get("care_type", ""),
+                    payload.get("from_lpz", ""),
+                    payload.get("leave_start", ""),
+                    payload.get("leave_end", ""),
+                    payload.get("leave_days", ""),
+                    payload.get("wa_event", ""),
+                    payload.get("vlk_passed", ""),
+                    ts,
+                    eid,
+                ),
+            )
+            if cur.rowcount > 0:
+                row = conn.execute(
+                    "SELECT sync_id FROM outpatient_entries WHERE id = ?", (eid,)
+                ).fetchone()
+                sid = (row["sync_id"] if row else "") or new_sync_id()
+                if not row or not row["sync_id"]:
+                    conn.execute(
+                        "UPDATE outpatient_entries SET sync_id = ? WHERE id = ?",
+                        (sid, eid),
+                    )
+                enqueue_outbox(conn, "outpatient_entries", sid, "upsert")
+            conn.commit()
+            db_cache.invalidate_all()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    ok = bool(retry_if_locked(_write))
+    if ok:
+        _trigger_journal_sync()
+    return ok
 
 
 def delete_outpatient_entry(entry_id) -> bool:
@@ -3692,15 +4288,160 @@ def delete_outpatient_entry(entry_id) -> bool:
         return False
     conn = _outpatient_db_connect()
     try:
-        cur = conn.execute("DELETE FROM outpatient_entries WHERE id = ?", (eid,))
+        conn.execute("PRAGMA foreign_keys = ON")
+        row = conn.execute(
+            "SELECT sync_id FROM outpatient_entries WHERE id = ?", (eid,)
+        ).fetchone()
+        if not row:
+            return False
+        if sync_enabled():
+            sid = row["sync_id"] or new_sync_id()
+            if not row["sync_id"]:
+                conn.execute(
+                    "UPDATE outpatient_entries SET sync_id = ? WHERE id = ?",
+                    (sid, eid),
+                )
+            from utils.sync_schema import touch_row
+
+            touch_row(conn, "outpatient_entries", sid, deleted=True)
+            enqueue_outbox(conn, "outpatient_entries", sid, "delete")
+            ok = True
+        else:
+            cur = conn.execute("DELETE FROM outpatient_entries WHERE id = ?", (eid,))
+            ok = cur.rowcount > 0
         conn.commit()
-        return cur.rowcount > 0
+        db_cache.invalidate_all()
+        if ok:
+            _trigger_journal_sync()
+        return ok
     finally:
         conn.close()
 
 
 def _outpatient_today() -> str:
     return datetime.now().strftime("%d.%m.%Y")
+
+
+def _validate_outpatient_payload(payload: dict) -> list[str]:
+    """Перевіряє обов’язкові поля звернення залежно від типу дії."""
+    errors: list[str] = []
+    pib = _normalize_spaces(payload.get("pib") or "")
+    if not pib:
+        errors.append("Вкажіть ПІБ.")
+
+    visit_date = _normalize_spaces(payload.get("date") or "")
+    if not visit_date:
+        errors.append("Вкажіть дату звернення.")
+    elif not cards_db.parse_ui_date(visit_date):
+        errors.append("Дата звернення має бути у форматі дд.мм.рррр.")
+
+    care = _normalize_spaces(payload.get("care_type") or "")
+    if not care:
+        errors.append("Оберіть тип дії.")
+    elif care not in cards_db.RESTRICTION_KINDS:
+        errors.append("Невідомий тип дії.")
+
+    tid = _normalize_spaces(str(payload.get("treatment_id") or ""))
+    new_title = _normalize_spaces(payload.get("new_treatment_title") or "")
+    if tid == "new" or (not tid and new_title):
+        if not new_title:
+            errors.append("Вкажіть назву нового лікування.")
+        cause = cards_db.normalize_treatment_cause(payload.get("treatment_cause") or "")
+        if not cause:
+            errors.append("Оберіть характер лікування: бойове або соматичне.")
+
+    wa = _normalize_spaces(payload.get("wa_event") or "")
+    if care in cards_db.CARE_WA_EVENTS and not wa:
+        errors.append("Оберіть варіант / статус дії.")
+    if care in cards_db.CARE_WA_EVENTS and wa and wa not in {
+        k for k, _ in cards_db.CARE_WA_EVENTS.get(care, [])
+    }:
+        errors.append("Обраний варіант не підходить для цього типу дії.")
+
+    def _need_date(value: str, label: str) -> None:
+        raw = _normalize_spaces(value or "")
+        if not raw:
+            errors.append(f"Вкажіть: {label}.")
+        elif not cards_db.parse_ui_date(raw):
+            errors.append(f"{label} має бути у форматі дд.мм.рррр.")
+
+    if care in ("consultation", "referral"):
+        if not _normalize_spaces(payload.get("referral_to") or ""):
+            errors.append(
+                "Вкажіть спеціаліста."
+                if care == "consultation"
+                else "Вкажіть, до якого спеціаліста направлення."
+            )
+        if not _normalize_spaces(payload.get("lpz") or ""):
+            errors.append(
+                "Вкажіть ЛПЗ, де консультований."
+                if care == "consultation"
+                else "Вкажіть, куди направлений."
+            )
+        if care == "referral":
+            _need_date(payload.get("leave_start") or "", "Дата направлення")
+    elif care == "vlk":
+        _need_date(payload.get("leave_start") or "", "Дата початку ВЛК")
+        if not _normalize_spaces(payload.get("lpz") or ""):
+            errors.append("Вкажіть місце проходження ВЛК.")
+    elif care in ("outpatient", "day_hospital"):
+        if wa == cards_db.WA_EVENT_OPEN:
+            _need_date(payload.get("leave_start") or "", "Початок періоду")
+            _need_date(payload.get("leave_end") or "", "Кінець періоду")
+        elif wa in (cards_db.WA_EVENT_EXTEND, cards_db.WA_EVENT_DISCHARGE):
+            _need_date(payload.get("leave_start") or "", "Початок періоду")
+            _need_date(payload.get("leave_end") or "", "Кінець періоду")
+        if not _normalize_spaces(payload.get("lpz") or ""):
+            errors.append("Вкажіть ЛПЗ.")
+    elif care == "inpatient":
+        if wa == cards_db.WA_EVENT_OPEN:
+            _need_date(payload.get("leave_start") or "", "Дата госпіталізації")
+            if not _normalize_spaces(payload.get("lpz") or ""):
+                errors.append("Вкажіть, де госпіталізований.")
+        elif wa == cards_db.WA_EVENT_EXTEND:
+            _need_date(payload.get("leave_start") or "", "Дата переводу")
+            if not _normalize_spaces(payload.get("lpz") or ""):
+                errors.append("Вкажіть ЛПЗ, куди переведений.")
+            if not _normalize_spaces(payload.get("from_lpz") or ""):
+                errors.append("Вкажіть, звідки переведений.")
+        elif wa == cards_db.WA_EVENT_DISCHARGE:
+            _need_date(payload.get("leave_start") or "", "Початок стаціонару")
+            _need_date(payload.get("leave_end") or "", "Дата виписки")
+            if not _normalize_spaces(payload.get("lpz") or ""):
+                errors.append("Вкажіть ЛПЗ виписки.")
+    elif care in ("rehab", "vacation", "abroad", "phys_exempt"):
+        _need_date(payload.get("leave_start") or "", "Дата початку")
+        if care != "phys_exempt" and not _normalize_spaces(payload.get("lpz") or ""):
+            errors.append("Вкажіть ЛПЗ.")
+
+    # дублікати прибрати, зберегти порядок
+    seen = set()
+    out = []
+    for err in errors:
+        if err not in seen:
+            seen.add(err)
+            out.append(err)
+    return out
+
+
+def _outpatient_edit_from_payload(payload: dict, *, entry_id: str = "") -> dict:
+    """Дані форми після невдалого збереження (щоб не втратити введене)."""
+    edit = {c: "" for c in OUTPATIENT_COLUMNS}
+    for key in OUTPATIENT_COLUMNS:
+        if key in payload and payload.get(key) is not None:
+            edit[key] = str(payload.get(key) or "")
+    edit["id"] = str(entry_id or payload.get("id") or "")
+    edit["new_treatment_title"] = str(payload.get("new_treatment_title") or "")
+    edit["treatment_cause"] = str(payload.get("treatment_cause") or "")
+    edit["vlk_passed"] = str(payload.get("vlk_passed") or "")
+    edit["vlk_passed_ids"] = tasks_db.parse_vlk_passed(edit.get("vlk_passed"))
+    # щоб UI знову показав блок «нове лікування»
+    tid = _normalize_spaces(str(payload.get("treatment_id") or ""))
+    if tid == "new" or (
+        not tid and _normalize_spaces(payload.get("new_treatment_title") or "")
+    ):
+        edit["treatment_id"] = "new"
+    return edit
 
 
 def _outpatient_row_dict(form) -> dict:
@@ -3739,9 +4480,14 @@ def _outpatient_row_dict(form) -> dict:
             wa_event = ""
     elif wa_event and wa_event not in {k for k, _ in cards_db.CARE_WA_EVENTS.get(care_type, [])}:
         wa_event = ""
-    # Консультація / направлення — без періоду «з/по»
-    if care_type in ("consultation", "referral"):
+    # Консультація — без періоду. Направлення — окрема дата направлення (leave_start).
+    if care_type == "consultation":
         leave_start = ""
+        leave_end = ""
+        leave_days = ""
+        from_lpz = ""
+    elif care_type == "referral":
+        leave_start = leave_start or visit_date
         leave_end = ""
         leave_days = ""
         from_lpz = ""
@@ -3780,6 +4526,9 @@ def _outpatient_row_dict(form) -> dict:
         leave_days = ""
         from_lpz = ""
         wa_event = cards_db.WA_EVENT_OPEN
+    vlk_passed = ""
+    if care_type == "vlk":
+        vlk_passed = tasks_db.serialize_vlk_passed(form.getlist("vlk_passed"))
     return {
         "date": visit_date,
         "pib": _normalize_spaces(form.get("pib", "")),
@@ -3794,12 +4543,14 @@ def _outpatient_row_dict(form) -> dict:
         "notes": _normalize_spaces(form.get("notes", "")),
         "treatment_id": _normalize_spaces(form.get("treatment_id", "")),
         "new_treatment_title": _normalize_spaces(form.get("new_treatment_title", "")),
+        "treatment_cause": _normalize_spaces(form.get("treatment_cause", "")),
         "care_type": care_type,
         "wa_event": wa_event,
         "from_lpz": from_lpz,
         "leave_start": leave_start,
         "leave_end": leave_end,
         "leave_days": leave_days,
+        "vlk_passed": vlk_passed,
     }
 
 
@@ -3873,6 +4624,7 @@ def _push_media_to_dropbox(treatment_id: int, media: dict, data: bytes = None) -
     Копіює медіа в Dropbox:
     /{root}/patients/{ПІБ}/{лікування}/файл
     Повертає шлях або "" якщо Dropbox не налаштовано.
+    Зберігає dropbox_path у БД, щоб інші ПК знаходили файл незалежно від локального id.
     """
     from utils.dropbox_sync import (
         dropbox_configured,
@@ -3887,16 +4639,28 @@ def _push_media_to_dropbox(treatment_id: int, media: dict, data: bytes = None) -
         raise ValueError("Лікування не знайдено для Dropbox")
     blob = data
     if blob is None:
-        path = cards_db.media_disk_path(media)
+        disk = cards_db.media_disk_path(media)
+        path = disk if os.path.isfile(disk) else cards_db.resolve_media_file_path(media)
+        if not path or not os.path.isfile(path):
+            raise FileNotFoundError("Локальний файл медіа відсутній для завантаження в Dropbox")
         with open(path, "rb") as fh:
             blob = fh.read()
-    dropbox_path = patient_media_dropbox_path(
+    # Уже збережений шлях — не перейменовуємо папку (сумісність зі старими PDF)
+    existing = (media.get("dropbox_path") or "").strip()
+    dropbox_path = existing or patient_media_dropbox_path(
         pib=treatment.get("pib") or "patient",
         treatment_title=treatment.get("title") or "treatment",
         treatment_id=int(treatment_id),
         filename=media.get("original_name") or media.get("filename") or "file",
+        treatment_sync_id=treatment.get("sync_id") or "",
     )
-    return upload_bytes_to_dropbox(blob, dropbox_path) or ""
+    uploaded = upload_bytes_to_dropbox(blob, dropbox_path) or ""
+    if uploaded and media.get("id"):
+        try:
+            cards_db.set_media_dropbox_path(int(media["id"]), uploaded)
+        except Exception as e:
+            logger.warning("Не збережено dropbox_path для media #%s: %s", media.get("id"), e)
+    return uploaded
 
 
 def _save_uploaded_media_list(
@@ -3904,6 +4668,8 @@ def _save_uploaded_media_list(
     storages,
     *,
     visit_id: int = None,
+    kind: str = "",
+    injury_case_id: int = 0,
 ) -> tuple[int, int, str]:
     """
     Зберігає список FileStorage у медіа + Dropbox.
@@ -3920,6 +4686,8 @@ def _save_uploaded_media_list(
                 int(treatment_id),
                 storage,
                 visit_id=visit_id,
+                kind=kind,
+                injury_case_id=injury_case_id,
             )
             saved += 1
             try:
@@ -3937,12 +4705,70 @@ def _save_uploaded_media_list(
     return saved, synced, dropbox_error
 
 
+def _save_injury_cert_pdfs(treatment_id: int, pdfs, *, injury_case_id: int = 0):
+    """PDF довідки пишеться на випадок поранення; усі епізоди лікування його бачать."""
+    cid = int(injury_case_id or 0)
+    tid = int(treatment_id or 0)
+    if not cid and tid:
+        cid = cards_db.attach_treatment_to_injury_case(tid)
+    if not cid:
+        return 0, 0, "Немає випадку поранення", 0
+    if not tid:
+        related = cards_db.list_treatments_for_injury_case(cid)
+        tid = int(related[0]["id"]) if related else 0
+    if not tid:
+        return 0, 0, "Спочатку додайте лікування до цього поранення", cid
+    saved_n, drop_n, drop_err = _save_uploaded_media_list(
+        tid,
+        pdfs,
+        kind=cards_db.MEDIA_KIND_INJURY_CERT,
+        injury_case_id=cid,
+    )
+    return saved_n, drop_n, drop_err, cid
+
+
 @app.route("/api/dropbox_status", methods=["GET"])
 def api_dropbox_status():
     """Діагностика підключення до Dropbox."""
     from utils.dropbox_sync import check_connection
 
     return jsonify(check_connection())
+
+
+@app.route("/api/app-update", methods=["GET"])
+def api_app_update():
+    """Перевірка наявності нової версії Install.exe."""
+    from utils import app_update
+
+    force = _normalize_spaces(request.args.get("force") or "") in ("1", "true", "yes")
+    return jsonify(app_update.check_for_update(force=force))
+
+
+@app.route("/api/app-update/install", methods=["POST"])
+def api_app_update_install():
+    """Завантажує Install.exe і запускає інсталятор поверх поточної програми."""
+    from utils import app_update
+
+    result = app_update.download_and_run_installer(force_check=True)
+    code = 200 if result.get("ok") else 400
+    return jsonify(result), code
+
+
+@app.route("/api/sync_status", methods=["GET"])
+def api_sync_status():
+    """Статус офлайн-синхронізації журналу (team mode)."""
+    from utils.journal_sync import get_status
+
+    return jsonify(get_status())
+
+
+@app.route("/api/sync_now", methods=["POST"])
+def api_sync_now():
+    """Примусова синхронізація локальної БД з Turso."""
+    from utils.journal_sync import run_sync
+
+    result = run_sync(force=True)
+    return jsonify(result)
 
 
 @app.route("/api/dropbox_resync", methods=["POST"])
@@ -3981,6 +4807,170 @@ def api_dropbox_resync():
         "skipped": skipped,
         "failed": failed,
         "error": first_error,
+    })
+
+
+@app.route("/api/injury_certs_sync", methods=["POST"])
+def api_injury_certs_sync():
+    """
+    Один клік: sync журналу (метадані довідок) + підтягнути PDF з Dropbox
+    і прив’язати/залити локальні PDF. Скидає кеш попереджень.
+    """
+    from utils.dropbox_sync import (
+        check_connection,
+        dropbox_configured,
+        find_dropbox_api_path_under_patient,
+    )
+    from utils.journal_sync import run_sync, sync_enabled
+    from utils import db_cache
+
+    journal = {}
+    if sync_enabled():
+        try:
+            journal = run_sync(force=True) or {}
+        except Exception as e:
+            logger.warning("injury_certs_sync journal: %s", e)
+            journal = {"message": str(e), "online": False}
+
+    linked = 0
+    try:
+        linked = cards_db.backfill_injury_cert_case_ids()
+    except Exception as e:
+        logger.warning("injury_certs_sync backfill: %s", e)
+
+    repaired = 0
+    try:
+        repaired = cards_db.repair_cert_kind_for_combat_pdfs()
+    except Exception as e:
+        logger.warning("injury_certs_sync repair pdfs: %s", e)
+
+    republish = {"republished": 0, "paths_set": 0}
+    try:
+        republish = cards_db.republish_injury_certs_for_sync() or {}
+    except Exception as e:
+        logger.warning("injury_certs_sync republish: %s", e)
+
+    # Після перепублікації — ще раз push у Turso (kind + injury_case_id + dropbox_path)
+    if sync_enabled() and (
+        int(republish.get("republished") or 0) > 0 or repaired or linked
+    ):
+        try:
+            journal = run_sync(force=True) or journal
+        except Exception as e:
+            logger.warning("injury_certs_sync push after republish: %s", e)
+
+    imported = {"linked": 0, "imported": 0}
+    try:
+        imported = cards_db.import_missing_certs_from_dropbox() or {}
+    except Exception as e:
+        logger.warning("injury_certs_sync import dropbox: %s", e)
+
+    if sync_enabled() and (
+        int(imported.get("linked") or 0) + int(imported.get("imported") or 0) > 0
+    ):
+        try:
+            journal = run_sync(force=True) or journal
+        except Exception as e:
+            logger.warning("injury_certs_sync push after import: %s", e)
+
+    ready = 0
+    uploaded = 0
+    linked_path = int(republish.get("paths_set") or 0)
+    missing = 0
+    failed = 0
+    first_error = ""
+
+    dbx_ok = False
+    if dropbox_configured():
+        status = check_connection()
+        dbx_ok = bool(status.get("ok"))
+        if not dbx_ok:
+            first_error = status.get("error") or "Dropbox недоступний"
+
+    for media in cards_db.list_injury_cert_media():
+        mid = media.get("id")
+        tid = int(media.get("treatment_id") or 0)
+        try:
+            path = cards_db.resolve_media_file_path(media)
+            if path and os.path.isfile(path):
+                ready += 1
+                if not dbx_ok or not tid:
+                    continue
+                if (media.get("dropbox_path") or "").strip():
+                    continue
+                # Спочатку знайти вже існуючий файл у Dropbox — без нових папок
+                treatment = cards_db.get_treatment(tid) or {}
+                try:
+                    found = find_dropbox_api_path_under_patient(
+                        pib=treatment.get("pib") or "",
+                        original_name=media.get("original_name") or "",
+                        filename=media.get("filename") or "",
+                    )
+                except Exception:
+                    found = None
+                if found:
+                    if cards_db.set_media_dropbox_path(int(mid), found):
+                        linked_path += 1
+                else:
+                    try:
+                        if _push_media_to_dropbox(tid, dict(media)):
+                            uploaded += 1
+                    except Exception as e:
+                        failed += 1
+                        first_error = first_error or str(e)
+            else:
+                missing += 1
+        except Exception as e:
+            failed += 1
+            first_error = first_error or str(e)
+            logger.warning("injury_certs_sync media #%s: %s", mid, e)
+
+    db_cache.invalidate_all()
+    pending = len(cards_db.list_missing_injury_certs())
+
+    parts = []
+    if journal.get("message"):
+        parts.append(str(journal["message"]))
+    if linked:
+        parts.append(f"прив’язано до поранень: {linked}")
+    if repaired:
+        parts.append(f"виправлено kind: {repaired}")
+    if republish.get("republished"):
+        parts.append(f"оновлено в хмарі: {republish['republished']}")
+    if imported.get("linked") or imported.get("imported"):
+        parts.append(
+            "з Dropbox: пов’язано "
+            f"{int(imported.get('linked') or 0)}, імпорт "
+            f"{int(imported.get('imported') or 0)}"
+        )
+    parts.append(f"довідки з файлом: {ready}")
+    if linked_path:
+        parts.append(f"шляхів Dropbox: {linked_path}")
+    if uploaded:
+        parts.append(f"залито нових: {uploaded}")
+    if missing:
+        parts.append(f"без файлу: {missing}")
+    parts.append(f"ще очікують PDF: {pending}")
+    if failed:
+        parts.append(f"помилок: {failed}")
+        if first_error:
+            parts.append(first_error[:120])
+
+    return jsonify({
+        "ok": failed == 0,
+        "ready": ready,
+        "uploaded": uploaded,
+        "linked": linked,
+        "linked_path": linked_path,
+        "imported": imported,
+        "repaired": repaired,
+        "republished": int(republish.get("republished") or 0),
+        "missing": missing,
+        "pending": pending,
+        "failed": failed,
+        "error": first_error,
+        "journal": journal,
+        "message": ". ".join(parts) if parts else "Немає довідок для синхронізації.",
     })
 
 
@@ -4091,166 +5081,12 @@ def api_extract_visit_text():
     })
 
 
-@app.route("/outpatient-journal", methods=["GET", "POST"])
-def outpatient_journal():
-    """Ведення амбулаторного журналу (SQLite)."""
-    _outpatient_init_db()
-    edit_id = request.args.get("edit", "").strip()
-    edit_row = get_outpatient_entry(edit_id) if edit_id else None
-
-    if request.method == "POST":
-        action = _normalize_spaces(request.form.get("action", "save"))
-
-        if action == "delete":
-            entry_id = request.form.get("id", "").strip()
-            if delete_outpatient_entry(entry_id):
-                flash("Запис видалено.", "success")
-            else:
-                flash("Запис не знайдено.", "error")
-            return redirect(url_for("outpatient_journal"))
-
-        payload = _outpatient_row_dict(request.form)
-        if not payload["pib"]:
-            flash("Вкажіть ПІБ.", "error")
-            return redirect(url_for("outpatient_journal"))
-
-        entry_id = request.form.get("id", "").strip()
-        try:
-            tid = cards_db.resolve_treatment_for_visit(
-                pib=payload["pib"],
-                rank_unit=payload["rank_unit"],
-                treatment_id=payload.get("treatment_id", ""),
-                new_treatment_title=payload.get("new_treatment_title", ""),
-                visit_date=payload.get("date") or _outpatient_today(),
-                diagnosis=payload.get("diagnosis", ""),
-            )
-        except Exception as e:
-            logger.error("Лікування для звернення: %s", e)
-            flash(f"Помилка прив'язки лікування: {e}", "error")
-            return redirect(url_for("outpatient_journal"))
-        payload["treatment_id"] = tid if tid is not None else ""
-
-        # Картка пацієнта + дані з Excel
-        try:
-            pid = cards_db.get_or_create_patient(payload["pib"], payload.get("rank_unit") or "")
-            _sync_patient_card(pid, payload["pib"])
-        except Exception as e:
-            logger.warning("Синхронізація картки пацієнта: %s", e)
-
-        if entry_id:
-            existing = get_outpatient_entry(entry_id)
-            if existing:
-                # Не затирати поля, які Tom Select міг не надіслати порожніми
-                care_now = payload.get("care_type") or existing.get("care_type") or ""
-                wa_now = payload.get("wa_event") or existing.get("wa_event") or ""
-                for key in (
-                    "pib", "rank_unit", "diagnosis", "referral_to", "lpz",
-                    "exam_result", "notes", "care_type", "wa_event", "from_lpz", "date",
-                    "leave_start", "leave_end", "leave_days", "mkx10",
-                ):
-                    if not payload.get(key) and existing.get(key):
-                        # навмисно порожні поля за сценарієм дії — не відновлювати
-                        if key in ("leave_start", "leave_end", "leave_days") and care_now in (
-                            "consultation", "referral",
-                        ):
-                            continue
-                        if key in ("leave_end", "leave_days") and care_now == "vlk":
-                            continue
-                        if key in ("leave_end", "leave_days") and care_now == "inpatient" and wa_now in (
-                            cards_db.WA_EVENT_OPEN,
-                            cards_db.WA_EVENT_EXTEND,
-                        ):
-                            continue
-                        if key == "from_lpz" and not (
-                            care_now == "inpatient" and wa_now == cards_db.WA_EVENT_EXTEND
-                        ):
-                            continue
-                        payload[key] = existing.get(key)
-                if tid is None and existing.get("treatment_id"):
-                    payload["treatment_id"] = existing.get("treatment_id")
-            if update_outpatient_entry(entry_id, payload):
-                visit_id = int(entry_id)
-                flash("Запис оновлено.", "success")
-            else:
-                flash("Запис для редагування не знайдено.", "error")
-                return redirect(url_for("outpatient_journal"))
-        else:
-            visit_id = insert_outpatient_entry(payload)
-            flash("Запис додано.", "success")
-
-        # Фото з Gemini / прикріплені до звернення → медіа лікування + Dropbox
-        try:
-            tid_media = int(payload["treatment_id"]) if payload.get("treatment_id") else None
-        except (TypeError, ValueError):
-            tid_media = None
-        if tid_media and visit_id:
-            media_files = (
-                request.files.getlist("gemini_media")
-                or request.files.getlist("media_files")
-            )
-            saved_n, drop_n, drop_err = _save_uploaded_media_list(
-                tid_media,
-                media_files,
-                visit_id=int(visit_id),
-            )
-            if saved_n:
-                msg = f"Додано медіа: {saved_n}."
-                if drop_n:
-                    msg += f" У Dropbox: {drop_n}."
-                flash(msg, "success")
-            if drop_err:
-                flash(f"Dropbox не синхронізовано: {drop_err}", "error")
-
-        # Явне «Закрив / Виписаний» у зверненні → завершити лікування
-        if (
-            payload.get("wa_event") == cards_db.WA_EVENT_DISCHARGE
-            and payload.get("treatment_id")
-        ):
-            try:
-                cards_db.set_treatment_status(int(payload["treatment_id"]), "closed")
-            except (TypeError, ValueError):
-                pass
-
-        # Період живе в полях звернення (leave_*); нагадування — з leave_end
-        tid = payload.get("treatment_id")
-        try:
-            tid_i = int(tid) if tid not in (None, "") else None
-        except (TypeError, ValueError):
-            tid_i = None
-        return_tid = _normalize_spaces(request.form.get("return_treatment", ""))
-        try:
-            return_tid_i = int(return_tid) if return_tid else None
-        except (TypeError, ValueError):
-            return_tid_i = None
-        target_tid = tid_i or return_tid_i
-        if target_tid:
-            return redirect(url_for(
-                "patient_treatment_detail",
-                treatment_id=target_tid,
-                wa=visit_id,
-            ))
-        return redirect(url_for("outpatient_journal"))
-
-    pib_query = _normalize_spaces(request.args.get("q", ""))
-    unit_filter = _normalize_spaces(request.args.get("unit", ""))
-    show_new = request.args.get("new", "").strip() in ("1", "true", "yes")
-    extend_tid = request.args.get("extend", "").strip()
-    extend_prefill = None
-    if extend_tid and not edit_row:
-        try:
-            extend_prefill = cards_db.suggest_extend_prefill(int(extend_tid))
-        except (TypeError, ValueError):
-            extend_prefill = None
-        if extend_prefill:
-            show_new = True
-            if not pib_query:
-                pib_query = extend_prefill.get("pib") or ""
-
-    show_form = bool(edit_row) or show_new
+def _outpatient_records_for_view(pib_query: str = "", unit: str = "") -> list:
+    """Записи журналу з підписами та посиланнями на картки — для таблиці."""
     records = list_outpatient_entries(
         order_desc=True,
         pib_query=pib_query,
-        unit=unit_filter,
+        unit=unit,
     )
     pib_map = cards_db.patient_id_map_by_pib()
     for rec in records:
@@ -4273,9 +5109,260 @@ def outpatient_journal():
         ) or (rec.get("referral_to") or "")
         pib_key = _normalize_spaces(rec.get("pib") or "").casefold()
         rec["patient_id"] = pib_map.get(pib_key)
-    all_asc = list_outpatient_entries(order_desc=False)
-    journal_count = len(all_asc)
-    unit_options = list_outpatient_units()
+    return records
+
+
+@app.route("/outpatient-journal/rows", methods=["GET"])
+def outpatient_journal_rows():
+    """HTML-фрагмент таблиці журналу для фільтрації без перезавантаження."""
+    _outpatient_init_db()
+    records = _outpatient_records_for_view(
+        _normalize_spaces(request.args.get("q", "")),
+        _normalize_spaces(request.args.get("unit", "")),
+    )
+    return render_template(
+        "partials/outpatient_journal_rows.html",
+        records=records,
+        journal_count=count_outpatient_entries(),
+    )
+
+
+@app.route("/outpatient-journal", methods=["GET", "POST"])
+def outpatient_journal():
+    """Ведення амбулаторного журналу (SQLite)."""
+    _outpatient_init_db()
+    edit_id = request.args.get("edit", "").strip()
+    edit_row = get_outpatient_entry(edit_id) if edit_id else None
+
+    def _wants_ajax() -> bool:
+        accept = (request.headers.get("Accept") or "").lower()
+        return (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in accept
+        )
+
+    def _render_page(
+        *,
+        edit_defaults: dict,
+        show_form: bool = True,
+        form_errors: list | None = None,
+        extend_mode: bool = False,
+        pib_query: str = "",
+        unit_filter: str = "",
+        return_treatment: str = "",
+    ):
+        records = _outpatient_records_for_view(pib_query, unit_filter)
+        return render_template(
+            "outpatient_journal.html",
+            records=records,
+            edit=edit_defaults,
+            show_form=show_form,
+            form_errors=form_errors or [],
+            journal_count=count_outpatient_entries(),
+            pib_query=pib_query,
+            unit_filter=unit_filter,
+            unit_options=list_outpatient_units(),
+            today_iso=datetime.now().strftime("%Y-%m-%d"),
+            today_ui=_outpatient_today(),
+            care_types=cards_db.RESTRICTION_KINDS,
+            care_wa_events=cards_db.CARE_WA_EVENTS,
+            extend_mode=extend_mode,
+            return_treatment=return_treatment,
+            reminders=cards_db.list_upcoming_reminders(),
+            reminder_within=REMINDER_WITHIN_DAYS,
+            vlk_queue=tasks_db.list_vlk_copy_people(),
+            vlk_doctors=tasks_db.VLK_DOCTORS,
+            vlk_date=tasks_db.next_vlk_copy_date(),
+            injury_certs=cards_db.list_missing_injury_certs(),
+            treatment_cause_options=cards_db.TREATMENT_CAUSE_OPTIONS,
+        )
+
+    if request.method == "POST":
+        action = _normalize_spaces(request.form.get("action", "save"))
+
+        if action == "delete":
+            entry_id = request.form.get("id", "").strip()
+            if delete_outpatient_entry(entry_id):
+                flash("Запис видалено.", "success")
+            else:
+                flash("Запис не знайдено.", "error")
+            return redirect(url_for("outpatient_journal"))
+
+        payload = _outpatient_row_dict(request.form)
+        entry_id = request.form.get("id", "").strip()
+        return_tid = _normalize_spaces(request.form.get("return_treatment", ""))
+        pib_keep = payload.get("pib") or ""
+        unit_keep = _normalize_spaces(request.args.get("unit", "")) or _normalize_spaces(
+            request.form.get("unit") or ""
+        )
+
+        def _fail(errors: list[str]):
+            edit = _outpatient_edit_from_payload(payload, entry_id=entry_id)
+            if _wants_ajax():
+                return jsonify({"ok": False, "errors": errors}), 400
+            return _render_page(
+                edit_defaults=edit,
+                show_form=True,
+                form_errors=errors,
+                pib_query=pib_keep,
+                unit_filter=unit_keep,
+                return_treatment=return_tid,
+            )
+
+        errors = _validate_outpatient_payload(payload)
+        if errors:
+            return _fail(errors)
+
+        try:
+            tid = cards_db.resolve_treatment_for_visit(
+                pib=payload["pib"],
+                rank_unit=payload["rank_unit"],
+                treatment_id=payload.get("treatment_id", ""),
+                new_treatment_title=payload.get("new_treatment_title", ""),
+                visit_date=payload.get("date") or _outpatient_today(),
+                diagnosis=payload.get("diagnosis", ""),
+                cause=payload.get("treatment_cause", ""),
+            )
+        except Exception as e:
+            logger.error("Лікування для звернення: %s", e)
+            if is_locked_error(e):
+                return _fail([
+                    "База тимчасово зайнята синхронізацією. Зачекайте кілька секунд і збережіть ще раз."
+                ])
+            return _fail([f"Помилка прив'язки лікування: {e}"])
+        payload["treatment_id"] = tid if tid is not None else ""
+
+        try:
+            pid = cards_db.get_or_create_patient(payload["pib"], payload.get("rank_unit") or "")
+            _sync_patient_card(pid, payload["pib"])
+        except Exception as e:
+            logger.warning("Синхронізація картки пацієнта: %s", e)
+
+        visit_id = None
+        try:
+            if entry_id:
+                existing = get_outpatient_entry(entry_id)
+                if existing:
+                    care_now = payload.get("care_type") or existing.get("care_type") or ""
+                    wa_now = payload.get("wa_event") or existing.get("wa_event") or ""
+                    for key in (
+                        "pib", "rank_unit", "diagnosis", "referral_to", "lpz",
+                        "exam_result", "notes", "care_type", "wa_event", "from_lpz", "date",
+                        "leave_start", "leave_end", "leave_days", "mkx10",
+                    ):
+                        if not payload.get(key) and existing.get(key):
+                            if key in ("leave_end", "leave_days") and care_now in (
+                                "consultation", "referral",
+                            ):
+                                continue
+                            if key == "leave_start" and care_now == "consultation":
+                                continue
+                            if key in ("leave_end", "leave_days") and care_now == "vlk":
+                                continue
+                            if key in ("leave_end", "leave_days") and care_now == "inpatient" and wa_now in (
+                                cards_db.WA_EVENT_OPEN,
+                                cards_db.WA_EVENT_EXTEND,
+                            ):
+                                continue
+                            if key == "from_lpz" and not (
+                                care_now == "inpatient" and wa_now == cards_db.WA_EVENT_EXTEND
+                            ):
+                                continue
+                            payload[key] = existing.get(key)
+                    if tid is None and existing.get("treatment_id"):
+                        payload["treatment_id"] = existing.get("treatment_id")
+                if update_outpatient_entry(entry_id, payload):
+                    visit_id = int(entry_id)
+                else:
+                    return _fail(["Запис для редагування не знайдено."])
+            else:
+                visit_id = insert_outpatient_entry(payload)
+        except Exception as e:
+            logger.exception("Збереження звернення")
+            if is_locked_error(e):
+                return _fail([
+                    "База тимчасово зайнята синхронізацією. Зачекайте кілька секунд і збережіть ще раз."
+                ])
+            return _fail([f"Не вдалося зберегти звернення: {e}"])
+
+        # Фото з Gemini / прикріплені до звернення → медіа лікування + Dropbox
+        try:
+            tid_media = int(payload["treatment_id"]) if payload.get("treatment_id") else None
+        except (TypeError, ValueError):
+            tid_media = None
+        media_msg = ""
+        if tid_media and visit_id:
+            media_files = (
+                request.files.getlist("gemini_media")
+                or request.files.getlist("media_files")
+            )
+            saved_n, drop_n, drop_err = _save_uploaded_media_list(
+                tid_media,
+                media_files,
+                visit_id=int(visit_id),
+            )
+            if saved_n:
+                media_msg = f" Додано медіа: {saved_n}."
+                if drop_n:
+                    media_msg += f" У Dropbox: {drop_n}."
+            if drop_err and not _wants_ajax():
+                flash(f"Dropbox не синхронізовано: {drop_err}", "error")
+
+        if (
+            payload.get("wa_event") == cards_db.WA_EVENT_DISCHARGE
+            and payload.get("treatment_id")
+        ):
+            try:
+                cards_db.set_treatment_status(int(payload["treatment_id"]), "closed")
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            tid_i = int(payload["treatment_id"]) if payload.get("treatment_id") not in (None, "") else None
+        except (TypeError, ValueError):
+            tid_i = None
+        try:
+            return_tid_i = int(return_tid) if return_tid else None
+        except (TypeError, ValueError):
+            return_tid_i = None
+        target_tid = tid_i or return_tid_i
+        if tid_i:
+            try:
+                cards_db.maybe_flag_injury_cert(tid_i, payload.get("diagnosis") or "")
+            except Exception as e:
+                logger.warning("Прив’язка поранення: %s", e)
+
+        ok_msg = ("Запис оновлено." if entry_id else "Запис додано.") + media_msg
+        if target_tid:
+            redirect_url = url_for(
+                "patient_treatment_detail",
+                treatment_id=target_tid,
+                wa=visit_id,
+            )
+        else:
+            redirect_url = url_for("outpatient_journal")
+
+        if _wants_ajax():
+            return jsonify({"ok": True, "message": ok_msg, "redirect": redirect_url})
+        flash(ok_msg, "success")
+        return redirect(redirect_url)
+
+    pib_query = _normalize_spaces(request.args.get("q", ""))
+    unit_filter = _normalize_spaces(request.args.get("unit", ""))
+    show_new = request.args.get("new", "").strip() in ("1", "true", "yes")
+    extend_tid = request.args.get("extend", "").strip()
+    extend_prefill = None
+    if extend_tid and not edit_row:
+        try:
+            extend_prefill = cards_db.suggest_extend_prefill(int(extend_tid))
+        except (TypeError, ValueError):
+            extend_prefill = None
+        if extend_prefill:
+            show_new = True
+            if not pib_query:
+                pib_query = extend_prefill.get("pib") or ""
+
+    show_form = bool(edit_row) or show_new
     edit_defaults = {c: "" for c in OUTPATIENT_COLUMNS}
     if edit_row:
         edit_defaults = {c: str(edit_row.get(c) or "") for c in OUTPATIENT_COLUMNS}
@@ -4287,24 +5374,17 @@ def outpatient_journal():
                 "leave_days", "notes",
               ):
                 edit_defaults[k] = str(v or "")
+    edit_defaults["vlk_passed_ids"] = tasks_db.parse_vlk_passed(
+        edit_defaults.get("vlk_passed")
+    )
 
-    return render_template(
-        "outpatient_journal.html",
-        records=records,
-        edit=edit_defaults,
+    return _render_page(
+        edit_defaults=edit_defaults,
         show_form=show_form,
-        journal_count=journal_count,
+        extend_mode=bool(extend_prefill),
         pib_query=pib_query,
         unit_filter=unit_filter,
-        unit_options=unit_options,
-        today_iso=datetime.now().strftime("%Y-%m-%d"),
-        today_ui=_outpatient_today(),
-        care_types=cards_db.RESTRICTION_KINDS,
-        care_wa_events=cards_db.CARE_WA_EVENTS,
-        extend_mode=bool(extend_prefill),
         return_treatment=request.args.get("return_treatment", "").strip(),
-        reminders=cards_db.list_upcoming_reminders(),
-        reminder_within=REMINDER_WITHIN_DAYS,
     )
 
 
@@ -4323,11 +5403,32 @@ def api_patient_treatments():
                 "id": t["id"],
                 "title": t["title"],
                 "status": t["status"],
-                "label": t["title"] + (" (завершене)" if t["status"] != "active" else ""),
+                "label": (
+                    t["title"]
+                    + (" (завершене)" if t["status"] != "active" else "")
+                    + (
+                        " · " + cards_db.treatment_cause_label(t.get("cause") or "")
+                        if t.get("cause")
+                        else ""
+                    )
+                ),
+                "cause": t.get("cause") or "",
             }
             for t in items
         ]
     })
+
+
+@app.route("/patient-cards/rows", methods=["GET"])
+def patient_cards_rows():
+    """HTML-фрагмент таблиці картотеки для пошуку без перезавантаження."""
+    _outpatient_init_db()
+    q = _normalize_spaces(request.args.get("q", ""))
+    return render_template(
+        "partials/patient_cards_rows.html",
+        patients=cards_db.list_patients(q),
+        pib_query=q,
+    )
 
 
 @app.route("/patient-cards", methods=["GET", "POST"])
@@ -4510,6 +5611,117 @@ def patient_card_detail(patient_id: int):
             flash("Картку збережено.", "success")
             return redirect(url_for("patient_card_detail", patient_id=patient_id))
 
+        if action == "add_injury_case":
+            date = _normalize_spaces(request.form.get("injury_date", ""))
+            title = _normalize_spaces(request.form.get("injury_title", "")) or "Поранення"
+            if not date:
+                flash("Вкажіть дату поранення.", "error")
+            else:
+                existing = cards_db.find_matching_injury_case(patient_id, date)
+                if existing:
+                    flash(
+                        "Поранення з цією датою вже є. PDF довідки завантажуйте один раз у цьому блоці.",
+                        "success",
+                    )
+                else:
+                    cards_db.create_injury_case(patient_id, injury_date=date, title=title)
+                    flash(
+                        "Поранення додано. PDF довідки завантажується один раз на всі лікування.",
+                        "success",
+                    )
+            return redirect(url_for("patient_card_detail", patient_id=patient_id))
+
+        if action == "save_injury_case":
+            try:
+                cid = int(request.form.get("injury_case_id") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            case = cards_db.get_injury_case(cid) if cid else None
+            if not case or int(case.get("patient_id") or 0) != int(patient_id):
+                flash("Поранення не знайдено.", "error")
+            else:
+                cards_db.update_injury_case(
+                    cid,
+                    injury_date=_normalize_spaces(request.form.get("injury_date", "")),
+                    title=_normalize_spaces(request.form.get("injury_title", "")),
+                )
+                flash("Дані поранення збережено.", "success")
+            return redirect(url_for("patient_card_detail", patient_id=patient_id))
+
+        if action == "skip_injury_case":
+            try:
+                cid = int(request.form.get("injury_case_id") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            case = cards_db.get_injury_case(cid) if cid else None
+            if not case or int(case.get("patient_id") or 0) != int(patient_id):
+                flash("Поранення не знайдено.", "error")
+            else:
+                skip = _normalize_spaces(request.form.get("skip", "")) == "1"
+                cards_db.update_injury_case(cid, skip_cert=skip)
+                flash(
+                    "Нагадування про довідку вимкнено." if skip else "Очікуємо довідку про обставини травми.",
+                    "success",
+                )
+            return redirect(url_for("patient_card_detail", patient_id=patient_id))
+
+        if action == "upload_injury_cert":
+            try:
+                cid = int(request.form.get("injury_case_id") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            case = cards_db.get_injury_case(cid) if cid else None
+            if not case or int(case.get("patient_id") or 0) != int(patient_id):
+                flash("Поранення не знайдено.", "error")
+            else:
+                storages = [
+                    f
+                    for f in request.files.getlist("injury_cert_file")
+                    if f and f.filename
+                ]
+                pdfs = [
+                    f
+                    for f in storages
+                    if str(f.filename or "").lower().endswith(".pdf")
+                    or (f.mimetype or "").lower() == "application/pdf"
+                ]
+                if not storages:
+                    flash("Оберіть PDF довідки про обставини травми.", "error")
+                elif not pdfs:
+                    flash("Довідка має бути файлом PDF.", "error")
+                else:
+                    saved_n, drop_n, drop_err, _cid = _save_injury_cert_pdfs(
+                        0, pdfs, injury_case_id=cid
+                    )
+                    if saved_n:
+                        cards_db.update_injury_case(cid, skip_cert=False)
+                        msg = "Довідку збережено — вона спільна для всіх лікувань цього поранення."
+                        if drop_n:
+                            msg += f" У Dropbox: {drop_n}."
+                        flash(msg, "success")
+                    else:
+                        flash(drop_err or "Не вдалося зберегти PDF.", "error")
+                    if drop_err and saved_n:
+                        flash(f"Dropbox не синхронізовано: {drop_err}", "error")
+            return redirect(url_for("patient_card_detail", patient_id=patient_id))
+
+        if action == "delete_treatment":
+            raw_tid = request.form.get("treatment_id", "")
+            try:
+                tid = int(raw_tid)
+            except (TypeError, ValueError):
+                flash("Невірний запис лікування.", "error")
+                return redirect(url_for("patient_card_detail", patient_id=patient_id))
+            treatment = cards_db.get_treatment(tid)
+            if not treatment or int(treatment.get("patient_id") or 0) != int(patient_id):
+                flash("Лікування не знайдено.", "error")
+                return redirect(url_for("patient_card_detail", patient_id=patient_id))
+            if cards_db.delete_treatment(tid):
+                flash("Лікування видалено. Звернення в журналі збережено.", "success")
+            else:
+                flash("Не вдалося видалити лікування.", "error")
+            return redirect(url_for("patient_card_detail", patient_id=patient_id))
+
         if action == "vlk_fabula":
             # зберегти ручні поля картки перед генерацією
             cards_db.update_patient(
@@ -4581,7 +5793,126 @@ def patient_card_detail(patient_id: int):
             patient.get("rank") or "",
             patient.get("service_category") or "",
         ),
+        injury_cases=cards_db.list_injury_cases_for_patient(patient_id),
     )
+
+
+def _copy_text_to_windows_clipboard(text: str) -> None:
+    """Копіює Unicode-текст у буфер Windows (CF_UNICODETEXT)."""
+    payload = str(text or "").strip()
+    if not payload:
+        return
+    if os.name != "nt":
+        raise RuntimeError("Копіювання в буфер наразі підтримується лише у Windows.")
+
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+    # UTF-16LE + NUL terminator, як очікує CF_UNICODETEXT
+    data = payload.encode("utf-16-le") + b"\x00\x00"
+    handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+    if not handle:
+        raise RuntimeError("Не вдалося виділити пам’ять для буфера обміну.")
+    locked = kernel32.GlobalLock(handle)
+    if not locked:
+        raise RuntimeError("Не вдалося заблокувати пам’ять буфера обміну.")
+    try:
+        ctypes.memmove(locked, data, len(data))
+    finally:
+        kernel32.GlobalUnlock(handle)
+
+    if not user32.OpenClipboard(None):
+        raise RuntimeError("Не вдалося відкрити буфер обміну.")
+    try:
+        user32.EmptyClipboard()
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            raise RuntimeError("Не вдалося записати текст у буфер обміну.")
+        # Після успішного SetClipboardData ОС володіє handle — не звільняємо.
+        handle = None
+    finally:
+        user32.CloseClipboard()
+        if handle:
+            kernel32.GlobalFree(handle)
+
+def _open_whatsapp_desktop() -> None:
+    if os.name != "nt":
+        return
+    try:
+        os.startfile("whatsapp:")  # type: ignore[attr-defined]
+    except OSError as e:
+        raise RuntimeError(
+            "Не вдалося відкрити WhatsApp Desktop. Перевірте, що застосунок встановлений."
+        ) from e
+
+
+def _prepare_whatsapp_export_dir(
+    treatment: dict, media: list[dict], wa_text: str
+) -> tuple[str, int, list[str]]:
+    folder_name = _safe_download_stem(
+        f"whatsapp_{treatment.get('pib') or 'patient'}_{treatment.get('id') or 'treatment'}"
+    )
+    export_dir = os.path.join(TEMP_DIR, folder_name)
+    if os.path.isdir(export_dir):
+        shutil.rmtree(export_dir, ignore_errors=True)
+    os.makedirs(export_dir, exist_ok=True)
+
+    copied = 0
+    skipped = []
+    for item in media:
+        mime = (item.get("mime") or "").strip().lower()
+        if mime not in (
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+            "application/pdf",
+        ):
+            skipped.append(item.get("original_name") or item.get("filename") or "file")
+            continue
+        src = cards_db.resolve_media_file_path(item, treatment=treatment)
+        if not src or not os.path.isfile(src):
+            skipped.append(item.get("original_name") or item.get("filename") or "file")
+            continue
+        dst_name = item.get("original_name") or item.get("filename") or os.path.basename(src)
+        dst_name = _safe_download_stem(dst_name, fallback="media")
+        if not os.path.splitext(dst_name)[1]:
+            dst_name += os.path.splitext(src)[1]
+        dst = os.path.join(export_dir, dst_name)
+        base, ext = os.path.splitext(dst)
+        n = 2
+        while os.path.exists(dst):
+            dst = f"{base}_{n}{ext}"
+            n += 1
+        shutil.copy2(src, dst)
+        copied += 1
+
+    if os.name == "nt":
+        try:
+            os.startfile(export_dir)  # type: ignore[attr-defined]
+        except OSError:
+            pass
+    return export_dir, copied, skipped
 
 
 @app.route("/patient-cards/treatment/<int:treatment_id>", methods=["GET", "POST"])
@@ -4591,6 +5922,54 @@ def patient_treatment_detail(treatment_id: int):
     if not treatment:
         flash("Лікування не знайдено.", "error")
         return redirect(url_for("patient_cards"))
+
+    def build_treatment_wa_text(current_treatment, current_visits) -> str:
+        wa_text_local = ""
+        wa_event = request.args.get("wa_event", "").strip()
+        wa_id = request.args.get("wa", "").strip()
+        if wa_event == "discharge" or (
+            not wa_id and current_treatment.get("status") == "closed"
+        ):
+            patient = _enrich_patient_for_whatsapp(
+                cards_db.get_patient(int(current_treatment["patient_id"]))
+            )
+            last = current_visits[-1] if current_visits else {}
+            care, leave_start, leave_end = cards_db.discharge_period(
+                current_treatment, current_visits
+            )
+            if care == "vlk":
+                leave_end = (
+                    _normalize_spaces(current_treatment.get("closed_on") or "")
+                    or leave_end
+                    or last.get("date")
+                    or cards_db.today_ui()
+                )
+            wa_text_local = cards_db.build_whatsapp_message(
+                patient or {"pib": current_treatment.get("pib")},
+                action=cards_db.wa_action_phrase(
+                    cards_db.WA_EVENT_DISCHARGE,
+                    care_type=care,
+                    lpz=last.get("lpz") or "",
+                    date=last.get("date") or "",
+                    leave_start=leave_start,
+                    leave_end=leave_end,
+                    specialist=last.get("referral_to") or "",
+                ),
+                diagnosis=last.get("diagnosis") or current_treatment.get("title") or "",
+                recommendations=last.get("exam_result") or last.get("notes") or "",
+                canonical_unit=_parse_outpatient_unit(
+                    (patient or {}).get("rank_unit")
+                    or current_treatment.get("patient_rank_unit")
+                    or ""
+                ),
+            )
+        elif wa_id:
+            entry = get_outpatient_entry(wa_id)
+            if entry:
+                wa_text_local = _whatsapp_for_visit(entry)
+        elif current_visits:
+            wa_text_local = _whatsapp_for_visit(current_visits[-1])
+        return wa_text_local
 
     if request.method == "POST":
         action = _normalize_spaces(request.form.get("action", ""))
@@ -4605,6 +5984,39 @@ def patient_treatment_detail(treatment_id: int):
         if action == "reopen":
             cards_db.set_treatment_status(treatment_id, "active")
             flash("Лікування знову активне.", "success")
+        elif action == "edit_treatment":
+            title = _normalize_spaces(request.form.get("title", ""))
+            cause = _normalize_spaces(request.form.get("cause", ""))
+            ok_title = cards_db.set_treatment_title(treatment_id, title) if title else False
+            if not title:
+                flash("Вкажіть назву лікування.", "error")
+            elif not ok_title:
+                flash("Не вдалося змінити назву.", "error")
+            if cause:
+                if cards_db.set_treatment_cause(treatment_id, cause):
+                    pass
+                else:
+                    flash("Оберіть бойове або соматичне.", "error")
+            if title and ok_title:
+                flash("Лікування оновлено.", "success")
+        elif action == "set_cause":
+            cause = _normalize_spaces(request.form.get("cause", ""))
+            if cards_db.set_treatment_cause(treatment_id, cause):
+                if cards_db.normalize_treatment_cause(cause) == cards_db.TREATMENT_CAUSE_COMBAT:
+                    flash("Бойове лікування: потрібна довідка, епізоди можуть іти в оплату.", "success")
+                else:
+                    flash("Соматичне лікування: довідка і оплата не потрібні.", "success")
+            else:
+                flash("Оберіть бойове або соматичне.", "error")
+        elif action == "delete_treatment":
+            treatment = cards_db.get_treatment(treatment_id)
+            pid = int((treatment or {}).get("patient_id") or 0)
+            if cards_db.delete_treatment(treatment_id):
+                flash("Лікування видалено. Звернення в журналі збережено.", "success")
+                if pid:
+                    return redirect(url_for("patient_card_detail", patient_id=pid))
+                return redirect(url_for("patient_cards"))
+            flash("Не вдалося видалити лікування.", "error")
         elif action == "upload_media":
             storages = [
                 f
@@ -4631,6 +6043,98 @@ def patient_treatment_detail(treatment_id: int):
                     flash(f"Не збережено файлів: {failed_n}.", "error")
                 if drop_err:
                     flash(f"Dropbox не синхронізовано: {drop_err}", "error")
+        elif action == "upload_injury_cert":
+            storages = [
+                f
+                for f in request.files.getlist("injury_cert_file")
+                if f and f.filename
+            ]
+            if not storages:
+                flash("Оберіть PDF довідки про обставини травми.", "error")
+            else:
+                pdfs = [
+                    f
+                    for f in storages
+                    if str(f.filename or "").lower().endswith(".pdf")
+                    or (f.mimetype or "").lower() == "application/pdf"
+                ]
+                if not pdfs:
+                    flash("Довідка має бути файлом PDF.", "error")
+                else:
+                    saved_n, drop_n, drop_err, cid = _save_injury_cert_pdfs(
+                        treatment_id, pdfs
+                    )
+                    if saved_n:
+                        if cid:
+                            cards_db.update_injury_case(cid, skip_cert=False)
+                        msg = "Довідку збережено для цього поранення (усі епізоди лікування)."
+                        if drop_n:
+                            msg += f" У Dropbox: {drop_n}."
+                        flash(msg, "success")
+                    else:
+                        flash(drop_err or "Не вдалося зберегти PDF.", "error")
+                    if drop_err and saved_n:
+                        flash(f"Dropbox не синхронізовано: {drop_err}", "error")
+        elif action == "link_injury_case":
+            raw = _normalize_spaces(request.form.get("injury_case_id", ""))
+            try:
+                if raw in ("", "0", "new"):
+                    cid = cards_db.create_injury_case(
+                        int(treatment.get("patient_id") or 0),
+                        injury_date=_normalize_spaces(request.form.get("injury_date", "")),
+                        title=treatment.get("title") or "Поранення",
+                    )
+                    cards_db.attach_treatment_to_injury_case(treatment_id, case_id=cid)
+                    flash("Лікування прив’язано до нового поранення.", "success")
+                else:
+                    cid = int(raw)
+                    case = cards_db.get_injury_case(cid)
+                    if not case or int(case.get("patient_id") or 0) != int(
+                        treatment.get("patient_id") or 0
+                    ):
+                        flash("Поранення не знайдено.", "error")
+                    else:
+                        cards_db.attach_treatment_to_injury_case(treatment_id, case_id=cid)
+                        flash("Лікування прив’язано до поранення. Довідка спільна.", "success")
+            except Exception:
+                flash("Не вдалося прив’язати поранення.", "error")
+        elif action == "mark_injury_cert":
+            mid = request.form.get("media_id", "")
+            try:
+                media = cards_db.get_media(int(mid))
+                same_treatment = bool(
+                    media and int(media.get("treatment_id") or 0) == int(treatment_id)
+                )
+                cid = cards_db.attach_treatment_to_injury_case(treatment_id)
+                same_case = bool(
+                    media
+                    and cid
+                    and int(media.get("injury_case_id") or 0) == int(cid)
+                )
+                if not media or not (same_treatment or same_case):
+                    flash("Файл не знайдено.", "error")
+                else:
+                    cards_db.set_media_kind(
+                        int(mid),
+                        cards_db.MEDIA_KIND_INJURY_CERT,
+                        injury_case_id=cid,
+                    )
+                    if cid:
+                        cards_db.update_injury_case(cid, skip_cert=False)
+                    flash("Файл позначено як довідку цього поранення.", "success")
+            except Exception:
+                flash("Не вдалося позначити файл.", "error")
+        elif action == "needs_injury_cert":
+            wanted = _normalize_spaces(request.form.get("needed", "")) == "1"
+            if cards_db.set_treatment_needs_injury_cert(treatment_id, wanted):
+                flash(
+                    "Очікуємо довідку про обставини травми."
+                    if wanted
+                    else "Нагадування про довідку вимкнено.",
+                    "success",
+                )
+            else:
+                flash("Не вдалося змінити статус довідки.", "error")
         elif action == "delete_media":
             mid = request.form.get("media_id", "")
             try:
@@ -4651,66 +6155,113 @@ def patient_treatment_detail(treatment_id: int):
                 flash("Звернення видалено.", "success")
             else:
                 flash("Не вдалося видалити звернення.", "error")
+        elif action == "send_whatsapp":
+            try:
+                from utils import whatsapp_api
+
+                if not whatsapp_api.whatsapp_configured():
+                    raise ValueError(
+                        "WhatsApp не налаштований. Заповніть WHATSAPP_ACCESS_TOKEN, "
+                        "WHATSAPP_PHONE_NUMBER_ID і WHATSAPP_RECIPIENT у командному конфігу."
+                    )
+
+                treatment = cards_db.get_treatment(treatment_id)
+                visits = cards_db.list_visits_for_treatment(treatment_id)
+                media = cards_db.list_media(treatment_id)
+                wa_text = build_treatment_wa_text(treatment, visits)
+                if not wa_text.strip():
+                    raise ValueError("Немає тексту для WhatsApp у цьому лікуванні.")
+
+                recipient = whatsapp_api.default_recipient()
+                whatsapp_api.send_text(recipient, wa_text)
+
+                sent_media = 0
+                skipped_names = []
+                for item in media:
+                    mime = (item.get("mime") or "").strip().lower()
+                    try:
+                        kind = whatsapp_api.supported_message_kind(mime)
+                    except Exception:
+                        skipped_names.append(item.get("original_name") or item.get("filename") or "file")
+                        continue
+                    path = cards_db.resolve_media_file_path(item, treatment=treatment)
+                    if not path or not os.path.isfile(path):
+                        skipped_names.append(item.get("original_name") or item.get("filename") or "file")
+                        continue
+                    media_id = whatsapp_api.upload_media(path, mime=mime)
+                    whatsapp_api.send_media(
+                        recipient,
+                        media_id,
+                        kind,
+                        filename=item.get("original_name") or item.get("filename") or "",
+                    )
+                    sent_media += 1
+
+                msg = "WhatsApp-повідомлення надіслано."
+                if sent_media:
+                    msg += f" Медіа: {sent_media}."
+                if skipped_names:
+                    preview = ", ".join(skipped_names[:3])
+                    if len(skipped_names) > 3:
+                        preview += "…"
+                    msg += f" Пропущено: {len(skipped_names)} ({preview})."
+                flash(msg, "success")
+            except Exception as e:
+                logger.exception("WhatsApp send failed")
+                flash(f"Не вдалося надіслати в WhatsApp: {e}", "error")
+        elif action == "prepare_whatsapp_desktop":
+            try:
+                treatment = cards_db.get_treatment(treatment_id)
+                visits = cards_db.list_visits_for_treatment(treatment_id)
+                media = cards_db.list_media(treatment_id)
+                wa_text = build_treatment_wa_text(treatment, visits)
+                if not wa_text.strip():
+                    raise ValueError("Немає тексту для WhatsApp у цьому лікуванні.")
+
+                _copy_text_to_windows_clipboard(wa_text)
+                export_dir, copied, skipped = _prepare_whatsapp_export_dir(
+                    treatment, media, wa_text
+                )
+                _open_whatsapp_desktop()
+
+                msg = "Підготовлено для WhatsApp Desktop: текст скопійовано в буфер."
+                if copied:
+                    msg += f" Файлів у тимчасовій папці: {copied}."
+                if skipped:
+                    msg += f" Пропущено: {len(skipped)}."
+                msg += f" Папка: {export_dir}"
+                flash(msg, "success")
+            except Exception as e:
+                logger.exception("WhatsApp desktop prepare failed")
+                flash(f"Не вдалося підготувати WhatsApp Desktop: {e}", "error")
         return redirect(url_for("patient_treatment_detail", treatment_id=treatment_id))
 
     treatment = cards_db.get_treatment(treatment_id)
     visits = cards_db.list_visits_for_treatment(treatment_id)
     media = cards_db.list_media(treatment_id)
+    cert_status = cards_db.injury_cert_status(treatment, visits, media)
     days_count = cards_db.treatment_day_count(treatment)
     totals = cards_db.visit_care_totals(treatment_id)
-
-    wa_text = ""
-    wa_event = request.args.get("wa_event", "").strip()
-    wa_id = request.args.get("wa", "").strip()
-    if wa_event == "discharge" or (not wa_id and treatment.get("status") == "closed"):
-        patient = _enrich_patient_for_whatsapp(
-            cards_db.get_patient(int(treatment["patient_id"]))
-        )
-        last = visits[-1] if visits else {}
-        care, leave_start, leave_end = cards_db.discharge_period(treatment, visits)
-        # для ВЛК дата завершення — день закриття лікування, місце — з останнього звернення
-        if care == "vlk":
-            leave_end = (
-                _normalize_spaces(treatment.get("closed_on") or "")
-                or leave_end
-                or last.get("date")
-                or cards_db.today_ui()
-            )
-        wa_text = cards_db.build_whatsapp_message(
-            patient or {"pib": treatment.get("pib")},
-            action=cards_db.wa_action_phrase(
-                cards_db.WA_EVENT_DISCHARGE,
-                care_type=care,
-                lpz=last.get("lpz") or "",
-                date=last.get("date") or "",
-                leave_start=leave_start,
-                leave_end=leave_end,
-                specialist=last.get("referral_to") or "",
-            ),
-            diagnosis=last.get("diagnosis") or treatment.get("title") or "",
-            recommendations=last.get("exam_result") or last.get("notes") or "",
-            canonical_unit=_parse_outpatient_unit(
-                (patient or {}).get("rank_unit") or treatment.get("patient_rank_unit") or ""
-            ),
-        )
-    elif wa_id:
-        entry = get_outpatient_entry(wa_id)
-        if entry:
-            wa_text = _whatsapp_for_visit(entry)
-    elif visits:
-        # за замовчуванням — текст останнього звернення
-        wa_text = _whatsapp_for_visit(visits[-1])
+    wa_text = build_treatment_wa_text(treatment, visits)
 
     return render_template(
         "patient_treatment_detail.html",
         treatment=treatment,
         visits=visits,
         media=media,
+        cert_status=cert_status,
         days_count=days_count,
         care_totals=totals,
         care_types=cards_db.RESTRICTION_KINDS,
+        treatment_cause_options=cards_db.TREATMENT_CAUSE_OPTIONS,
         today_ui=_outpatient_today(),
         wa_text=wa_text,
+        whatsapp_ready=bool(
+            getattr(app_config, "WHATSAPP_ACCESS_TOKEN", "").strip()
+            and getattr(app_config, "WHATSAPP_PHONE_NUMBER_ID", "").strip()
+            and getattr(app_config, "WHATSAPP_RECIPIENT", "").strip()
+        ),
+        whatsapp_recipient=getattr(app_config, "WHATSAPP_RECIPIENT", "").strip(),
     )
 
 
@@ -4721,9 +6272,9 @@ def patient_media_file(media_id: int):
     if not media:
         flash("Файл не знайдено.", "error")
         return redirect(url_for("patient_cards"))
-    path = cards_db.media_disk_path(media)
-    if not os.path.isfile(path):
-        flash("Файл відсутній на диску.", "error")
+    path = cards_db.resolve_media_file_path(media)
+    if not path or not os.path.isfile(path):
+        flash("Файл відсутній локально і в Dropbox.", "error")
         return redirect(url_for("patient_treatment_detail", treatment_id=media["treatment_id"]))
     return send_file(
         path,
@@ -4763,16 +6314,535 @@ def _payments_month_year_from_request():
     return year, month, MONTH_UA.get(month, str(month))
 
 
+@app.route("/team-tasks", methods=["GET"])
+def team_tasks():
+    grouped = tasks_db.list_tasks_grouped()
+    return render_template(
+        "team_tasks.html",
+        columns=tasks_db.COLUMNS,
+        grouped=grouped,
+        members=tasks_db.list_members(),
+        discord_webhook=tasks_db.get_setting(tasks_db.SETTING_DISCORD_WEBHOOK),
+        manager_sync_ids=tasks_db.get_manager_sync_ids(),
+    )
+
+
+def _build_polyclinic_letter_docx(rows: list, on_date: str) -> io.BytesIO:
+    """Лист «Поліклініка дд.мм.рррр» зі списком направлених на консультацію."""
+    doc = DocxDocument()
+    title = doc.add_paragraph()
+    run = title.add_run(f"Поліклініка {on_date}")
+    run.bold = True
+    run.font.size = Pt(16)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph("")
+    if not rows:
+        doc.add_paragraph("Немає направлень на обрану дату.")
+    else:
+        for i, row in enumerate(rows, start=1):
+            pib = (row.get("pib") or "—").strip()
+            unit = (row.get("unit_short") or row.get("rank_unit") or "").strip()
+            specialist = (row.get("referral_to") or "").strip()
+            diagnosis = (row.get("diagnosis") or "").strip()
+            line = f"{i}. {pib}"
+            if unit:
+                line += f", {unit}"
+            if specialist:
+                line += f" — {specialist}"
+            if diagnosis:
+                line += f" ({diagnosis})"
+            doc.add_paragraph(line)
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+@app.route("/patient-control", methods=["GET", "POST"])
+def patient_control():
+    """Контроль стаціонару (дзвінок медика), поранені, поліклініка."""
+    _outpatient_init_db()
+    tab = _normalize_spaces(request.values.get("tab") or "inpatient") or "inpatient"
+    if tab not in ("inpatient", "wounded", "polyclinic"):
+        tab = "inpatient"
+
+    if request.method == "POST":
+        action = _normalize_spaces(request.form.get("action") or "")
+        if action == "medic_call":
+            visit_id = request.form.get("visit_id")
+            call_date = _normalize_spaces(request.form.get("medic_call_date") or "")
+            try:
+                vid = int(visit_id)
+            except (TypeError, ValueError):
+                vid = 0
+            if not vid or not call_date:
+                flash("Вкажіть дату дзвінка медика.", "error")
+            elif cards_db.set_medic_call_date(vid, call_date):
+                flash("Дату дзвінка збережено. Лічильник 10 днів почато знову.", "success")
+                _trigger_journal_sync()
+            else:
+                flash("Не вдалося зберегти дату дзвінка.", "error")
+            return redirect(url_for("patient_control", tab="inpatient"))
+
+        if action == "polyclinic_letter":
+            on_date = _normalize_spaces(request.form.get("poly_date") or "")
+            dt = cards_db.parse_ui_date(on_date)
+            if not dt:
+                flash("Оберіть коректну дату для листа поліклініки.", "error")
+                return redirect(url_for("patient_control", tab="polyclinic"))
+            day = cards_db.format_ui_date(dt)
+            rows = cards_db.list_polyclinic_referrals(day)
+            buf = _build_polyclinic_letter_docx(rows, day)
+            fname = f"Poliklinika_{day.replace('.', '-')}.docx"
+            return send_file(
+                buf,
+                as_attachment=True,
+                download_name=fname,
+                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+        return redirect(url_for("patient_control", tab=tab))
+
+    poly_date = _normalize_spaces(request.args.get("poly_date") or "") or cards_db.today_ui()
+    if not cards_db.parse_ui_date(poly_date):
+        poly_date = cards_db.today_ui()
+
+    inpatients = cards_db.list_active_inpatients()
+    wounded = cards_db.list_active_combat_treatments()
+    polyclinic = cards_db.list_polyclinic_referrals(poly_date)
+    need_call = sum(1 for r in inpatients if r.get("needs_call"))
+
+    return render_template(
+        "patient_control.html",
+        tab=tab,
+        inpatients=inpatients,
+        need_call=need_call,
+        call_threshold=cards_db.INPATIENT_MEDIC_CALL_DAYS,
+        wounded=wounded,
+        polyclinic=polyclinic,
+        poly_date=poly_date,
+        today=cards_db.today_ui(),
+    )
+
+
+def _task_json(task: dict | None) -> dict:
+    if not task:
+        return {}
+    return {
+        "id": int(task.get("id") or 0),
+        "title": task.get("title") or "",
+        "description": task.get("description") or "",
+        "status": task.get("status") or "todo",
+        "position": int(task.get("position") or 0),
+        "assignee": task.get("assignee") or "",
+        "member_sync_id": task.get("member_sync_id") or "",
+        "member_sync_ids": list(task.get("member_sync_ids") or []),
+        "assignees": list(task.get("assignees") or []),
+        "deadline": task.get("deadline") or "",
+        "deadline_overdue": bool(task.get("deadline_overdue")),
+        "updated_at": task.get("updated_at") or "",
+    }
+
+
+def _member_json(member: dict | None) -> dict:
+    if not member:
+        return {}
+    return {
+        "id": int(member.get("id") or 0),
+        "name": member.get("name") or "",
+        "discord_id": member.get("discord_id") or "",
+        "sync_id": member.get("sync_id") or "",
+    }
+
+
+def _task_notify_who(members: list[dict]) -> str:
+    mentions = []
+    for member in members:
+        uid = str(member.get("discord_id") or "").strip()
+        name = str(member.get("name") or "").strip()
+        mentions.append(f"<@{uid}>" if uid else (name or "виконавець"))
+    return ", ".join(mentions) if mentions else "команда"
+
+
+def _task_people_line(task: dict) -> str:
+    names = []
+    for person in task.get("assignees") or []:
+        name = str(person.get("name") or "").strip()
+        if name:
+            names.append(name)
+    if names:
+        return ", ".join(names)
+    return str(task.get("assignee") or "").strip()
+
+
+def _task_notify_text(task: dict, members: list[dict]) -> str:
+    title = str(task.get("title") or "").strip()
+    desc = str(task.get("description") or "").strip()
+    lines = [
+        f"**МПБ · нова задача** для {_task_notify_who(members)}",
+        f"**{title}**" if title else "",
+    ]
+    if desc:
+        lines.append(desc)
+    due = str(task.get("deadline") or "").strip()
+    if due:
+        lines.append(f"Дедлайн: {due}")
+    lines.append("Відкрийте Medhar → Задачі.")
+    return "\n".join(line for line in lines if line)
+
+
+def _task_progress_text(task: dict, kind: str, managers: list[dict]) -> str:
+    title = str(task.get("title") or "").strip()
+    if kind == "done":
+        header = "**МПБ · задачу виконано**"
+    else:
+        header = "**МПБ · задачу прийнято в роботу**"
+    lines = [f"{header} для {_task_notify_who(managers)}" if managers else header]
+    if title:
+        lines.append(f"**{title}**")
+    people = _task_people_line(task)
+    if people:
+        lines.append(f"Виконавці: {people}")
+    due = str(task.get("deadline") or "").strip()
+    if due:
+        lines.append(f"Дедлайн: {due}")
+    lines.append("Відкрийте Medhar → Задачі.")
+    return "\n".join(lines)
+
+
+def _discord_mention_result(people: list[dict], *, no_ids: str) -> dict:
+    pinged = [str(m.get("name") or "").strip() for m in people if m.get("discord_id")]
+    skipped = [str(m.get("name") or "").strip() for m in people if not m.get("discord_id")]
+    pinged = [name for name in pinged if name]
+    skipped = [name for name in skipped if name]
+    if pinged:
+        message = "Discord: згадано " + ", ".join(pinged) + "."
+        if skipped:
+            message += " Без згадки: " + ", ".join(skipped) + " (немає Discord ID)."
+        return {"ok": True, "channel": "discord", "message": message}
+    return {"ok": True, "channel": "discord", "message": no_ids}
+
+
+def _poll_hours_for_task(task: dict) -> int:
+    due = str(task.get("deadline") or "").strip()
+    if not due:
+        return 168
+    try:
+        day = datetime.strptime(due, "%d.%m.%Y")
+    except ValueError:
+        return 168
+    end = datetime(day.year, day.month, day.day, 23, 59, 59)
+    hours = int((end - datetime.now()).total_seconds() // 3600) + 1
+    return max(1, min(hours, 768))
+
+
+def _notify_task_assignee(task: dict) -> dict:
+    webhook = tasks_db.get_setting(tasks_db.SETTING_DISCORD_WEBHOOK)
+    if not webhook:
+        return {
+            "ok": False,
+            "error": "Спочатку вставте Discord webhook у «Виконавці».",
+        }
+    members = tasks_db.resolve_task_members(task)
+    if not members:
+        return {
+            "ok": False,
+            "error": "Призначте виконавців, щоб надіслати сповіщення.",
+        }
+    from utils import discord_api
+
+    uids = [str(m.get("discord_id") or "").strip() for m in members]
+    uids = [uid for uid in uids if uid]
+    text = _task_notify_text(task, members)
+    poll = discord_api.ack_poll(hours=_poll_hours_for_task(task))
+    try:
+        discord_api.send_webhook(
+            webhook,
+            text,
+            user_ids=uids or None,
+            poll=poll,
+        )
+    except discord_api.DiscordError:
+        poll["answers"] = list(poll.get("answers") or []) + [
+            {"poll_media": {"text": "Пізніше"}}
+        ]
+        try:
+            discord_api.send_webhook(
+                webhook,
+                text,
+                user_ids=uids or None,
+                poll=poll,
+            )
+        except discord_api.DiscordError:
+            try:
+                discord_api.send_webhook(
+                    webhook,
+                    text + "\nДля ознайомлення поставте реакцію ➕➕ (**ПлюсПлюс**).",
+                    user_ids=uids or None,
+                )
+            except discord_api.DiscordError as exc:
+                return {"ok": False, "error": str(exc)}
+    return _discord_mention_result(
+        members,
+        no_ids="Discord: надіслано в канал (без згадки — додайте Discord ID виконавцям).",
+    )
+
+
+def _notify_task_progress(task: dict, prev_status: str) -> dict | None:
+    new_status = str(task.get("status") or "")
+    prev = str(prev_status or "")
+    if prev == new_status:
+        return None
+    if new_status == "doing":
+        kind = "accepted"
+    elif new_status == "done":
+        kind = "done"
+    else:
+        return None
+    webhook = tasks_db.get_setting(tasks_db.SETTING_DISCORD_WEBHOOK)
+    if not webhook:
+        return None
+    managers = tasks_db.list_managers()
+    from utils import discord_api
+
+    uids = [str(m.get("discord_id") or "").strip() for m in managers]
+    uids = [uid for uid in uids if uid]
+    try:
+        discord_api.send_webhook(
+            webhook,
+            _task_progress_text(task, kind, managers),
+            user_ids=uids or None,
+        )
+    except discord_api.DiscordError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not managers:
+        return {
+            "ok": True,
+            "channel": "discord",
+            "message": "Discord: статус у каналі. Позначте керівника в «Команда», щоб був особистий пінг.",
+        }
+    if kind == "done":
+        no_ids = "Discord: задачу виконано — надіслано в канал (додайте Discord ID керівнику)."
+    else:
+        no_ids = "Discord: задачу прийнято — надіслано в канал (додайте Discord ID керівнику)."
+    return _discord_mention_result(managers, no_ids=no_ids)
+
+
+def _team_settings_json() -> dict:
+    return {
+        "ok": True,
+        "discord_webhook": tasks_db.get_setting(tasks_db.SETTING_DISCORD_WEBHOOK),
+        "manager_sync_ids": tasks_db.get_manager_sync_ids(),
+    }
+
+
+@app.route("/api/team-settings", methods=["GET", "POST"])
+def api_team_settings():
+    if request.method == "GET":
+        return jsonify(_team_settings_json())
+    data = request.get_json(silent=True) or {}
+    try:
+        if "discord_webhook" in data:
+            tasks_db.set_setting(
+                tasks_db.SETTING_DISCORD_WEBHOOK,
+                data.get("discord_webhook") or "",
+            )
+        if "manager_sync_ids" in data:
+            tasks_db.set_manager_sync_ids(data.get("manager_sync_ids"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify(_team_settings_json())
+
+
+@app.route("/api/team-members", methods=["GET", "POST"])
+def api_team_members():
+    if request.method == "GET":
+        return jsonify({"ok": True, "members": [_member_json(m) for m in tasks_db.list_members()]})
+    data = request.get_json(silent=True) or {}
+    try:
+        member = tasks_db.create_member(
+            name=data.get("name") or "",
+            discord_id=data.get("discord_id") or "",
+        )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "member": _member_json(member)})
+
+
+@app.route("/api/team-members/<int:member_id>", methods=["PATCH", "DELETE"])
+def api_team_member_item(member_id: int):
+    if request.method == "DELETE":
+        if not tasks_db.delete_member(member_id):
+            return jsonify({"ok": False, "error": "Людину не знайдено"}), 404
+        return jsonify({"ok": True})
+    data = request.get_json(silent=True) or {}
+    fields = {}
+    for key in ("name", "discord_id"):
+        if key in data:
+            fields[key] = data.get(key)
+    try:
+        member = tasks_db.update_member(member_id, **fields)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not member:
+        return jsonify({"ok": False, "error": "Людину не знайдено"}), 404
+    return jsonify({"ok": True, "member": _member_json(member)})
+
+
+@app.route("/api/team-tasks", methods=["GET", "POST"])
+def api_team_tasks():
+    if request.method == "GET":
+        return jsonify(
+            {
+                "ok": True,
+                "tasks": [_task_json(t) for t in tasks_db.list_tasks()],
+                "columns": list(tasks_db.COLUMNS),
+            }
+        )
+    data = request.get_json(silent=True) or {}
+    try:
+        task = tasks_db.create_task(
+            title=data.get("title") or "",
+            description=data.get("description") or "",
+            assignee=data.get("assignee") or "",
+            member_sync_id=data.get("member_sync_id") or "",
+            member_sync_ids=data.get("member_sync_ids"),
+            deadline=data.get("deadline") or "",
+            status=data.get("status") or "todo",
+        )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    notify = _notify_task_assignee(task) if data.get("notify") else None
+    return jsonify({"ok": True, "task": _task_json(task), "notify": notify})
+
+
+@app.route("/api/team-tasks/<int:task_id>", methods=["GET", "PATCH", "DELETE"])
+def api_team_task_item(task_id: int):
+    if request.method == "GET":
+        task = tasks_db.get_task(task_id)
+        if not task:
+            return jsonify({"ok": False, "error": "Задачу не знайдено"}), 404
+        return jsonify({"ok": True, "task": _task_json(task)})
+    if request.method == "DELETE":
+        if not tasks_db.delete_task(task_id):
+            return jsonify({"ok": False, "error": "Задачу не знайдено"}), 404
+        return jsonify({"ok": True})
+    data = request.get_json(silent=True) or {}
+    fields = {}
+    for key in ("title", "description", "assignee", "member_sync_id", "member_sync_ids", "deadline"):
+        if key in data:
+            fields[key] = data.get(key)
+    try:
+        task = tasks_db.update_task(task_id, **fields)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not task:
+        return jsonify({"ok": False, "error": "Задачу не знайдено"}), 404
+    notify = _notify_task_assignee(task) if data.get("notify") else None
+    return jsonify({"ok": True, "task": _task_json(task), "notify": notify})
+
+
+@app.route("/api/team-tasks/<int:task_id>/move", methods=["POST"])
+def api_team_task_move(task_id: int):
+    data = request.get_json(silent=True) or {}
+    try:
+        index = int(data.get("index", 0))
+    except (TypeError, ValueError):
+        index = 0
+    task = tasks_db.move_task(task_id, data.get("status") or "todo", index)
+    if not task:
+        return jsonify({"ok": False, "error": "Задачу не знайдено"}), 404
+    notify = _notify_task_progress(task, task.get("previous_status") or "")
+    return jsonify({"ok": True, "task": _task_json(task), "notify": notify})
+
+
+def _vlk_item_json(item: dict | None) -> dict:
+    if not item:
+        return {}
+    return {
+        "id": int(item.get("id") or 0),
+        "pib": item.get("pib") or "",
+        "note": item.get("note") or "",
+        "passed": list(item.get("passed") or []),
+        "patient_id": int(item.get("patient_id") or 0),
+    }
+
+
+@app.route("/api/vlk-queue", methods=["GET", "POST"])
+def api_vlk_queue():
+    items = [_vlk_item_json(x) for x in tasks_db.list_vlk_copy_people()]
+    if request.method == "GET":
+        return jsonify({"ok": True, "items": items})
+    return jsonify({"ok": True, "items": items, "item": None})
+
+
+@app.route("/api/vlk-queue/import-journal", methods=["POST"])
+def api_vlk_queue_import_journal():
+    items = tasks_db.list_vlk_copy_people()
+    return jsonify(
+        {
+            "ok": True,
+            "added": len(items),
+            "skipped": 0,
+            "items": [_vlk_item_json(x) for x in items],
+        }
+    )
+
+
+@app.route("/api/vlk-queue/reorder", methods=["POST"])
+def api_vlk_queue_reorder():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids") or []
+    if not isinstance(ids, list):
+        ids = []
+    items = tasks_db.reorder_vlk_copy_people(ids)
+    return jsonify({"ok": True, "items": [_vlk_item_json(x) for x in items]})
+
+
+@app.route("/api/vlk-queue/<int:item_id>", methods=["PATCH", "DELETE"])
+def api_vlk_queue_item(item_id: int):
+    if request.method == "DELETE":
+        if not tasks_db.delete_vlk_queue_item(item_id):
+            return jsonify({"ok": False, "error": "Запис не знайдено"}), 404
+        return jsonify({"ok": True})
+    data = request.get_json(silent=True) or {}
+    fields = {}
+    for key in ("pib", "note", "passed"):
+        if key in data:
+            fields[key] = data.get(key)
+    try:
+        item = tasks_db.update_vlk_queue_item(item_id, **fields)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not item:
+        return jsonify({"ok": False, "error": "Запис не знайдено"}), 404
+    return jsonify({"ok": True, "item": _vlk_item_json(item)})
+
+
+@app.route("/api/vlk-queue/date", methods=["GET", "POST"])
+def api_vlk_queue_date():
+    if request.method == "GET":
+        return jsonify(
+            {"ok": True, "date": tasks_db.get_setting(tasks_db.SETTING_VLK_DATE)}
+        )
+    data = request.get_json(silent=True) or {}
+    try:
+        value = tasks_db.set_setting(
+            tasks_db.SETTING_VLK_DATE, data.get("date") or ""
+        )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "date": value})
+
+
 @app.route("/payments-vedomost", methods=["GET", "POST"])
 def payments_vedomost():
-    """Прев’ю неоплачених бойових стаціонарів / реабілітації / відпусток + DOCX."""
+    """Прев’ю неоплачених стаціонарів / реабілітації / відпусток з журналу + DOCX."""
     from utils.payments_unpaid import (
         TYPE_UA,
         aggregate_vedomost_rows,
         find_unpaid_segments,
         list_payment_files,
-        load_combat_patterns,
-        load_payments_treatments_df,
         render_payments_docx,
         unique_matched_diagnoses,
     )
@@ -4780,31 +6850,19 @@ def payments_vedomost():
     os.makedirs(PAYMENTS_DIR, exist_ok=True)
     year, month, month_ua = _payments_month_year_from_request()
     payment_files = list_payment_files()
-    patterns = [
-        {"id": pid, "label": label, "regex": cre.pattern}
-        for pid, label, cre in load_combat_patterns(force_reload=True)
-    ]
 
     action = _normalize_spaces(request.values.get("action", ""))
     download = action == "download" or request.values.get("download") == "1"
 
-    treatments_df = load_payments_treatments_df(year)
-    treatments_source = f"treatments_{year}.xlsx"
     segments = []
     rows = []
     error = None
-    if treatments_df is None or getattr(treatments_df, "empty", True):
-        error = (
-            f"Немає файлу {treatments_source} у data/. "
-            "Завантажте актуальну базу лікувань на сторінці «Бази даних»."
-        )
-    else:
-        try:
-            segments = find_unpaid_segments(treatments_df, year=year, month=month)
-            rows = aggregate_vedomost_rows(segments)
-        except Exception as e:
-            logger.exception("payments-vedomost")
-            error = str(e)
+    try:
+        segments = find_unpaid_segments(year=year, month=month)
+        rows = aggregate_vedomost_rows(segments)
+    except Exception as e:
+        logger.exception("payments-vedomost")
+        error = str(e)
 
     if download and not error:
         if not os.path.isfile(PAYMENTS_TEMPLATE):
@@ -4855,16 +6913,13 @@ def payments_vedomost():
         month=month,
         month_ua=month_ua,
         payment_files=payment_files,
-        patterns=patterns,
         preview_rows=preview_rows,
         vedomost_rows=rows,
         matched_diagnoses=unique_matched_diagnoses(segments),
         error=error,
         payments_dir=PAYMENTS_DIR,
         history_start=PAYMENTS_HISTORY_START,
-        unit_filter=PAYMENTS_UNIT_FILTER,
         carry_day=PAYMENTS_PREV_MONTH_CARRY_DAY,
-        treatments_source=treatments_source,
     )
 
 
@@ -4884,5 +6939,11 @@ def _warmup_treatments_cache():
 
 
 if __name__ == '__main__':
+    # Desktop-режим: python -m desktop.run_desktop
+    if (os.environ.get("MEDHAR_DESKTOP") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ) or getattr(sys, "frozen", False):
+        from desktop.run_desktop import main as _desktop_main
+        raise SystemExit(_desktop_main())
     threading.Thread(target=_warmup_treatments_cache, daemon=True).start()
     app.run(debug=DEBUG)

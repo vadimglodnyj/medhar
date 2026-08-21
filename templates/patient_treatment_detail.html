@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ treatment.title }} - {{ treatment.pib }}{% endblock %}
 {% block content %}
-<div class="container-fluid px-3 px-lg-4 treatment-page">
+<div class="mh-shell treatment-page">
   <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
     <a href="{{ url_for('patient_card_detail', patient_id=treatment.patient_id) }}" class="btn btn-sm btn-outline-secondary">
       <i class="fas fa-arrow-left me-1"></i>{{ treatment.pib }}
@@ -22,14 +22,52 @@
       <button type="submit" class="btn btn-sm btn-outline-success">Відновити</button>
     </form>
     {% endif %}
+    <form method="POST" class="d-inline"
+          onsubmit="return confirm('Видалити це лікування? Звернення в журналі залишаться, але відв’яжуться від нього.');">
+      <input type="hidden" name="action" value="delete_treatment" />
+      <button type="submit" class="btn btn-sm btn-outline-danger">
+        <i class="fas fa-trash me-1"></i>Видалити
+      </button>
+    </form>
   </div>
 
   <div class="treatment-head mb-3">
-    <h1 class="treatment-title mb-1">{{ treatment.title }}</h1>
-    <div class="treatment-meta text-muted small">
+    <div class="d-flex flex-wrap align-items-start gap-2">
+      <h1 class="treatment-title mb-1">{{ treatment.title }}</h1>
+      <button type="button" class="btn btn-sm btn-outline-secondary mt-1" data-bs-toggle="collapse"
+              data-bs-target="#edit-treatment" aria-expanded="false" aria-controls="edit-treatment"
+              title="Редагувати лікування">
+        <i class="fas fa-pen me-1"></i>Редагувати
+      </button>
+    </div>
+    <div class="collapse mt-2" id="edit-treatment">
+      <form method="POST" class="row g-2 align-items-end">
+        <input type="hidden" name="action" value="edit_treatment" />
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="edit-treatment-title">Назва</label>
+          <input type="text" class="form-control form-control-sm" id="edit-treatment-title"
+                 name="title" value="{{ treatment.title }}" required />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small mb-1" for="edit-treatment-cause">Тип</label>
+          <select class="form-select form-select-sm" id="edit-treatment-cause" name="cause" required>
+            {% for key, label in treatment_cause_options %}
+            <option value="{{ key }}" {% if cert_status.cause == key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-sm btn-primary">Зберегти</button>
+        </div>
+      </form>
+    </div>
+    <div class="treatment-meta text-muted small mt-1">
       <span class="badge text-bg-{{ 'success' if treatment.status == 'active' else 'secondary' }}">
         {{ 'Активне' if treatment.status == 'active' else 'Завершене' }}
       </span>
+      {% if cert_status.cause_label %}
+      <span class="badge text-bg-{{ 'danger' if cert_status.cause == 'combat' else 'secondary' }}">{{ cert_status.cause_label }}</span>
+      {% endif %}
       <span>з {{ treatment.started_on or '—' }}{% if treatment.closed_on %} — {{ treatment.closed_on }}{% endif %}</span>
       <span>· <strong>{{ days_count }}</strong> дн.</span>
       {% for key, label in care_types.items() %}
@@ -55,7 +93,20 @@
   <div class="wa-strip mb-3" id="wa-box">
     <div class="wa-strip-bar">
       <span><i class="fab fa-whatsapp me-1"></i>Текст для WhatsApp</span>
-      <button type="button" class="btn btn-sm btn-success" id="wa-copy-btn">Копіювати</button>
+      <div class="d-flex gap-2 align-items-center">
+        <button type="button" class="btn btn-sm btn-success" id="wa-copy-btn">Копіювати</button>
+        <form method="POST" class="d-inline" id="wa-prepare-form">
+          <input type="hidden" name="action" value="prepare_whatsapp_desktop" />
+          <button
+            type="submit"
+            class="btn btn-sm btn-outline-success"
+            id="wa-prepare-btn"
+            title="Скопіювати текст, зібрати медіа в тимчасову папку і відкрити WhatsApp Desktop"
+          >
+            <i class="fas fa-share-nodes me-1"></i>Підготувати
+          </button>
+        </form>
+      </div>
     </div>
     <pre class="wa-strip-text mb-0" id="wa-text">{{ wa_text }}</pre>
   </div>
@@ -70,7 +121,7 @@
         </div>
         {% if visits %}
         <div class="list-group list-group-flush visit-list">
-          {% for v in visits %}
+          {% for v in visits|reverse %}
           <div class="list-group-item visit-item py-3 px-3">
             <div class="d-flex justify-content-between gap-2 align-items-start mb-2">
               <div class="d-flex flex-wrap align-items-center gap-2 min-w-0">
@@ -79,7 +130,9 @@
                 {% if v.care_type_label %}
                 <span class="badge text-bg-light border">{{ v.care_type_label }}{% if v.wa_event_label %} · {{ v.wa_event_label }}{% endif %}</span>
                 {% endif %}
-                {% if v.care_type not in ('consultation', 'referral') %}
+                {% if v.care_type == 'referral' and (v.leave_start or v.date) %}
+                  <span class="small text-nowrap text-muted">направлення {{ v.leave_start or v.date }}</span>
+                {% elif v.care_type != 'consultation' %}
                   {% if v.leave_start and v.leave_end %}
                   <span class="small text-nowrap text-muted">
                     {{ v.leave_start }} — {{ v.leave_end }}{% if v.leave_days %} ({{ v.leave_days }} дн.){% endif %}
@@ -95,7 +148,7 @@
                    title="Редагувати звернення">
                   <i class="fas fa-pen"></i>
                 </a>
-                {% if treatment.status == 'active' and loop.last %}
+                {% if treatment.status == 'active' and loop.first %}
                 <a class="btn btn-sm btn-outline-primary"
                    href="{{ url_for('outpatient_journal', new=1, extend=treatment.id, q=treatment.pib) }}"
                    title="Продовжити">
@@ -154,6 +207,95 @@
     </div>
 
     <div class="col-lg-5 col-xl-4">
+      <div class="card treatment-card mb-3 {% if cert_status.missing %}border-danger{% endif %}">
+        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+          <strong class="small text-uppercase tracking-wide">Довідка про обставини травми</strong>
+          {% if cert_status.missing %}
+          <span class="badge text-bg-danger">немає PDF</span>
+          {% elif cert_status.certs %}
+          <span class="badge text-bg-success">є PDF</span>
+          {% endif %}
+        </div>
+        <div class="card-body py-2">
+          {% if cert_status.injury_date %}
+          <p class="small mb-2">
+            Довідка на поранення <strong>{{ cert_status.injury_date }}</strong> —
+            один PDF на всі епізоди (амбулаторне, стаціонар, відпустка).
+          </p>
+          {% elif cert_status.needed %}
+          <p class="small mb-2">Нагадування висітиме, доки не завантажите PDF довідки до цього поранення.</p>
+          {% else %}
+          <p class="small text-muted mb-2">
+            Довідка потрібна лише для <strong>бойового</strong> лікування.
+            Оберіть тип через «Редагувати»: бойове або соматичне.
+          </p>
+          {% endif %}
+          {% if cert_status.related_treatments and cert_status.related_treatments|length > 1 %}
+          <p class="small mb-2">
+            Також:
+            {% for t in cert_status.related_treatments if t.id != treatment.id %}
+            <a href="{{ url_for('patient_treatment_detail', treatment_id=t.id) }}">{{ t.title }}</a>{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </p>
+          {% endif %}
+          {% if cert_status.certs %}
+          <ul class="list-unstyled small mb-2">
+            {% for m in cert_status.certs %}
+            <li class="d-flex justify-content-between align-items-center gap-2 mb-1">
+              <a href="{{ url_for('patient_media_file', media_id=m.id) }}" target="_blank" rel="noopener">
+                <i class="fas fa-file-pdf me-1"></i>{{ m.original_name }}
+              </a>
+              <form method="POST" class="d-inline" onsubmit="return confirm('Прибрати цей файл?');">
+                <input type="hidden" name="action" value="delete_media" />
+                <input type="hidden" name="media_id" value="{{ m.id }}" />
+                <button type="submit" class="btn btn-sm btn-link text-danger p-0">×</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+          {% elif cert_status.missing %}
+          <p class="small text-danger mb-2">PDF ще немає — завантажте один раз, не до кожного лікування.</p>
+          {% endif %}
+          <form method="POST" enctype="multipart/form-data" class="mb-2">
+            <input type="hidden" name="action" value="upload_injury_cert" />
+            <label class="form-label small mb-1" for="injury-cert-file">PDF довідки</label>
+            <div class="d-flex gap-2">
+              <input type="file" class="form-control form-control-sm" id="injury-cert-file"
+                     name="injury_cert_file" accept="application/pdf,.pdf" />
+              <button type="submit" class="btn btn-sm btn-primary flex-shrink-0">
+                <i class="fas fa-upload me-1"></i>Завантажити
+              </button>
+            </div>
+          </form>
+          {% if cert_status.patient_cases %}
+          <form method="POST" class="mb-2">
+            <input type="hidden" name="action" value="link_injury_case" />
+            <label class="form-label small mb-1" for="injury-case-pick">Поранення</label>
+            <div class="d-flex gap-2">
+              <select class="form-select form-select-sm" id="injury-case-pick" name="injury_case_id">
+                <option value="new">+ нове поранення</option>
+                {% for c in cert_status.patient_cases %}
+                <option value="{{ c.id }}" {% if c.id == cert_status.case_id %}selected{% endif %}>
+                  {{ c.injury_date or 'без дати' }} · {{ c.title }}
+                </option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm btn-outline-secondary flex-shrink-0">Прив’язати</button>
+            </div>
+          </form>
+          {% endif %}
+          <form method="POST" class="m-0">
+            <input type="hidden" name="action" value="needs_injury_cert" />
+            {% if cert_status.needed %}
+            <input type="hidden" name="needed" value="0" />
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Не потрібна довідка</button>
+            {% else %}
+            <input type="hidden" name="needed" value="1" />
+            <button type="submit" class="btn btn-sm btn-outline-danger">Очікувати довідку</button>
+            {% endif %}
+          </form>
+        </div>
+      </div>
       <div class="card treatment-card treatment-media-card">
         <div class="card-header py-2 d-flex justify-content-between align-items-center">
           <strong class="small text-uppercase tracking-wide">Медіа</strong>
@@ -206,6 +348,17 @@
                   <i class="fas fa-times"></i>
                 </button>
               </form>
+              {% if m.kind != 'injury_cert' and m.mime == 'application/pdf' %}
+              <form method="POST" class="mt-1">
+                <input type="hidden" name="action" value="mark_injury_cert" />
+                <input type="hidden" name="media_id" value="{{ m.id }}" />
+                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1" title="Це довідка про обставини травми">
+                  Довідка
+                </button>
+              </form>
+              {% elif m.kind == 'injury_cert' %}
+              <div class="small text-danger mt-1">довідка</div>
+              {% endif %}
             </div>
             {% endfor %}
           </div>
@@ -428,6 +581,13 @@
       sel.addRange(range);
       document.execCommand("copy");
     }
+  });
+
+  document.getElementById("wa-prepare-form")?.addEventListener("submit", function () {
+    const btn = document.getElementById("wa-prepare-btn");
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Підготовка…';
   });
 
   (function () {

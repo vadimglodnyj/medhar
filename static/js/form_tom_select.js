@@ -73,6 +73,13 @@
       return;
     }
     el.value = v;
+    if (el.tagName === "SELECT" && v && el.value !== v) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      el.appendChild(opt);
+      el.value = v;
+    }
   };
 
   window.flushTomInputs = function flushTomInputs(root) {
@@ -273,6 +280,9 @@
 
     rootEl.querySelectorAll("select").forEach(function (el) {
       if (!el.id || skip[el.id] || el.tomselect) return;
+      if (el.hasAttribute("data-mh-no-tom") || el.closest(".mh-choice-chips")) {
+        return;
+      }
       if (el.disabled && !lockedIds[el.id]) return;
       instances[el.id] = initSelectTomSelect(el, {
         create: !!createIds[el.id],
@@ -291,6 +301,22 @@
 
     rootEl.querySelectorAll("input").forEach(function (el) {
       if (!el.id || skip[el.id] || el.tomselect) return;
+      if (el.hasAttribute("data-mh-no-tom") || el.closest(".mh-choice-chips")) {
+        return;
+      }
+      // Дати маскує static/js/date_input.js, не Tom Select.
+      if (
+        el.classList.contains("mh-date") ||
+        el.hasAttribute("data-mh-date") ||
+        el.hasAttribute("data-ua-date") ||
+        el._mhDateMask
+      ) {
+        return;
+      }
+      const ph = (el.getAttribute("placeholder") || "").toLowerCase();
+      if (ph.indexOf("дд.мм") !== -1 || ph.indexOf("dd.mm") !== -1) {
+        return;
+      }
       const type = (el.type || "text").toLowerCase();
       if (
         type === "hidden" ||

@@ -3,6 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        try {
+          var key = "medhar-theme";
+          var t = localStorage.getItem(key);
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+          document.documentElement.setAttribute("data-theme", t);
+          document.documentElement.setAttribute("data-bs-theme", t === "dark" ? "dark" : "light");
+        } catch (e) {}
+      })();
+    </script>
     <title>{% block title %}Медичний пункт батальйону{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,7 +34,7 @@
       rel="stylesheet"
     />
     <link
-      href="{{ url_for('static', filename='css/medhar.css') }}?v=8"
+      href="{{ url_for('static', filename='css/medhar.css') }}?v=31"
       rel="stylesheet"
     />
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
@@ -27,10 +42,38 @@
   </head>
   <body>
     <nav class="navbar navbar-expand-lg mh-navbar sticky-top">
-      <div class="container">
-        <a class="navbar-brand" href="{{ url_for('index') }}">
-          <i class="fas fa-hospital me-2"></i>Медичний пункт батальйону
-        </a>
+      <div class="mh-shell">
+        <div class="mh-brand-cluster">
+          <a class="navbar-brand" href="{{ url_for('index') }}">
+            <img
+              src="{{ url_for('static', filename='img/medhar_logo.png') }}"
+              alt=""
+              class="mh-brand-logo"
+            />
+            МПБ
+          </a>
+          {% if sync_status and sync_status.enabled %}
+          <button type="button" class="btn btn-sm mh-sync-badge" id="sync-status-btn"
+            title="{{ sync_status.message or 'Синхронізація журналу' }}">
+            <span id="sync-status-icon" class="me-1">●</span>
+            <span id="sync-status-text">Журнал</span>
+            {% if sync_status.pending %}
+            <span class="badge bg-warning text-dark ms-1" id="sync-pending-badge">{{ sync_status.pending }}</span>
+            {% endif %}
+          </button>
+          {% endif %}
+          <button
+            type="button"
+            class="mh-theme-toggle"
+            id="mh-theme-toggle"
+            data-no-loader
+            title="Тема"
+            aria-label="Перемкнути тему"
+          >
+            <i class="fas fa-moon" aria-hidden="true"></i>
+            <i class="fas fa-sun" aria-hidden="true"></i>
+          </button>
+        </div>
         <button
           class="navbar-toggler"
           type="button"
@@ -45,38 +88,48 @@
         <div class="collapse navbar-collapse" id="navbarNav">
           <ul class="navbar-nav ms-auto gap-lg-1">
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('databases') }}">
-                <i class="fas fa-database me-1"></i>Бази даних
+              <a class="nav-link" href="{{ url_for('medical_characteristic') }}" aria-label="Медична характеристика">
+                <i class="fas fa-file-medical" aria-hidden="true"></i>
+                <span class="mh-nav-label">Медична характеристика</span>
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('medical_characteristic') }}">
-                <i class="fas fa-file-medical me-1"></i>Медична характеристика
+              <a class="nav-link" href="{{ url_for('service_characteristic') }}" aria-label="Службова характеристика">
+                <i class="fas fa-file-signature" aria-hidden="true"></i>
+                <span class="mh-nav-label">Службова характеристика</span>
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('service_characteristic') }}">
-                <i class="fas fa-file-signature me-1"></i>Службова характеристика
+              <a class="nav-link" href="{{ url_for('vlk_report') }}" aria-label="Рапорти">
+                <i class="fas fa-file-lines" aria-hidden="true"></i>
+                <span class="mh-nav-label">Рапорти</span>
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('vlk_report') }}">
-                <i class="fas fa-file-lines me-1"></i>Рапорти
+              <a class="nav-link" href="{{ url_for('outpatient_journal') }}" aria-label="Амбулаторний журнал">
+                <i class="fas fa-book-medical" aria-hidden="true"></i>
+                <span class="mh-nav-label">Амбулаторний журнал</span>
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('outpatient_journal') }}">
-                <i class="fas fa-book-medical me-1"></i>Амбулаторний журнал
+              <a class="nav-link" href="{{ url_for('patient_control') }}" aria-label="Контроль пацієнтів">
+                <i class="fas fa-user-check" aria-hidden="true"></i>
+                <span class="mh-nav-label">Контроль</span>
+                {% if inpatient_call_pending %}
+                <span class="badge text-bg-danger ms-1">{{ inpatient_call_pending }}</span>
+                {% endif %}
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('patient_cards') }}">
-                <i class="fas fa-folder-open me-1"></i>Картотека
+              <a class="nav-link" href="{{ url_for('team_tasks') }}" aria-label="Задачі">
+                <i class="fas fa-table-columns" aria-hidden="true"></i>
+                <span class="mh-nav-label">Задачі</span>
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('payments_vedomost') }}">
-                <i class="fas fa-file-invoice-dollar me-1"></i>Оплати
+              <a class="nav-link" href="{{ url_for('payments_vedomost') }}" aria-label="Оплати">
+                <i class="fas fa-file-invoice-dollar" aria-hidden="true"></i>
+                <span class="mh-nav-label">Оплати</span>
               </a>
             </li>
           </ul>
@@ -86,6 +139,18 @@
 
     <main class="main-content">{% block content %}{% endblock %}</main>
 
+    <div id="mh-update-banner" class="mh-update-banner d-none" role="status" aria-live="polite">
+      <div class="mh-shell d-flex flex-wrap align-items-center gap-2 py-2">
+        <span id="mh-update-text" class="me-auto">Доступна нова версія.</span>
+        <button type="button" class="btn btn-sm btn-light" id="mh-update-install" data-no-loader>
+          Оновити
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-light" id="mh-update-dismiss" data-no-loader aria-label="Закрити">
+          Пізніше
+        </button>
+      </div>
+    </div>
+
     <div class="loading-overlay" id="loadingOverlay" aria-live="polite" aria-busy="false">
       <div class="loading-box" role="status">
         <div class="spinner-border text-primary" style="width: 2.75rem; height: 2.75rem;" aria-hidden="true"></div>
@@ -94,19 +159,36 @@
     </div>
 
     <footer class="mh-footer">
-      <div class="container">
-        <div class="row align-items-center gy-2">
-          <div class="col-md-6">
-            <h5 class="mb-1"><i class="fas fa-hospital me-2"></i>Медичний пункт батальйону</h5>
-            <p>Генерація медичних документів з Excel</p>
+      <div class="mh-shell">
+        <div class="row align-items-center gy-3">
+          <div class="col-lg-5">
+            <h5 class="mb-1">МПБ</h5>
+            <p>Медичний пункт батальйону</p>
           </div>
-          <div class="col-md-6 text-md-end">
-            <p class="mb-1">
-              <a href="{{ url_for('index') }}" class="mh-footer-link">
-                <i class="fas fa-circle-info me-1"></i>Як почати
+          <div class="col-lg-7">
+            <nav class="mh-footer-nav" aria-label="Додаткова навігація">
+              <a href="{{ url_for('databases') }}" class="mh-footer-link">
+                <i class="fas fa-database me-1"></i>Бази даних
               </a>
-            </p>
-            <p class="mb-0">© 2026 Медичний пункт батальйону</p>
+              <a href="{{ url_for('patient_cards') }}" class="mh-footer-link">
+                <i class="fas fa-folder-open me-1"></i>Картотека
+              </a>
+              {% if has_team_vault or session_mode %}
+              <a href="{{ url_for('team_login', change=1) }}" class="mh-footer-link" title="Змінити режим">
+                {% if session_mode == 'team' %}
+                <i class="fas fa-users me-1"></i>Команда
+                {% elif session_mode == 'local' %}
+                <i class="fas fa-laptop me-1"></i>Локально
+                {% else %}
+                <i class="fas fa-right-to-bracket me-1"></i>Режим
+                {% endif %}
+              </a>
+              {% endif %}
+              <a href="{{ url_for('index') }}" class="mh-footer-link">
+                <i class="fas fa-circle-info me-1"></i>Гайд
+              </a>
+            </nav>
+            <p class="mh-footer-copy mb-0">© 2026 Медичний пункт батальйону</p>
           </div>
         </div>
       </div>
@@ -114,9 +196,47 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-      function showLoading() {
+      (function initThemeToggle() {
+        var key = "medhar-theme";
+        function current() {
+          return document.documentElement.getAttribute("data-theme") === "dark"
+            ? "dark"
+            : "light";
+        }
+        function apply(theme) {
+          var t = theme === "dark" ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", t);
+          document.documentElement.setAttribute(
+            "data-bs-theme",
+            t === "dark" ? "dark" : "light"
+          );
+          try {
+            localStorage.setItem(key, t);
+          } catch (e) {}
+          var btn = document.getElementById("mh-theme-toggle");
+          if (btn) {
+            btn.title = t === "dark" ? "Світла тема" : "Темна тема";
+            btn.setAttribute(
+              "aria-label",
+              t === "dark" ? "Увімкнути світлу тему" : "Увімкнути темну тему"
+            );
+          }
+        }
+        document.addEventListener("DOMContentLoaded", function () {
+          apply(current());
+          var btn = document.getElementById("mh-theme-toggle");
+          if (!btn) return;
+          btn.addEventListener("click", function () {
+            apply(current() === "dark" ? "light" : "dark");
+          });
+        });
+      })();
+
+      function showLoading(message) {
         const el = document.getElementById("loadingOverlay");
         if (!el) return;
+        const text = el.querySelector(".loading-text");
+        if (text) text.textContent = message || "Завантаження...";
         el.classList.add("is-active");
         el.setAttribute("aria-busy", "true");
       }
@@ -131,6 +251,52 @@
       document.addEventListener("DOMContentLoaded", function () {
         hideLoading();
       });
+
+      // Переходи на сторінки з БД помітно тривають, тому показуємо індикатор
+      // одразу після кліку, не чекаючи відповіді сервера.
+      (function initNavigationLoading() {
+        let safetyTimer = null;
+
+        function showUntilNavigation(message) {
+          showLoading(message);
+          // Якщо перехід не стався (скасовано, віддано файл) — не залишаємо оверлей.
+          window.clearTimeout(safetyTimer);
+          safetyTimer = window.setTimeout(hideLoading, 20000);
+        }
+
+        document.addEventListener("click", function (event) {
+          if (event.defaultPrevented || event.button !== 0) return;
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          const link = event.target.closest("a");
+          if (!link || link.hasAttribute("download")) return;
+          if ("noLoader" in link.dataset) return;
+          if (link.target && link.target !== "_self") return;
+          const href = link.getAttribute("href") || "";
+          if (!href || href.startsWith("#") || href.toLowerCase().startsWith("javascript:")) return;
+          let url;
+          try {
+            url = new URL(href, window.location.href);
+          } catch (e) {
+            return;
+          }
+          if (url.origin !== window.location.origin) return;
+          if (url.href.split("#")[0] === window.location.href.split("#")[0]) return;
+          showUntilNavigation(link.dataset.loadingText);
+        });
+
+        document.addEventListener("submit", function (event) {
+          const form = event.target;
+          if (event.defaultPrevented || !(form instanceof HTMLFormElement)) return;
+          if ("noLoader" in form.dataset) return;
+          showUntilNavigation(form.dataset.loadingText);
+        });
+
+        // Повернення «назад» бере сторінку з кешу браузера разом з оверлеєм.
+        window.addEventListener("pageshow", function () {
+          window.clearTimeout(safetyTimer);
+          hideLoading();
+        });
+      })();
 
       function formatDate(dateStr) {
         if (!dateStr) return "Н/Д";
@@ -158,6 +324,172 @@
           if (alertDiv.parentNode) alertDiv.remove();
         }, 5000);
       }
+
+      (function initSyncStatus() {
+        const btn = document.getElementById("sync-status-btn");
+        const icon = document.getElementById("sync-status-icon");
+        const text = document.getElementById("sync-status-text");
+        const badge = document.getElementById("sync-pending-badge");
+        if (!btn || !icon || !text) return;
+
+        function applyStatus(data) {
+          const online = !!data.online;
+          const syncing = !!data.syncing;
+          const pending = parseInt(data.pending, 10) || 0;
+          const err = (data.last_error || "").trim();
+          // Є реальна помилка даних — жовтий «Помилка», не зелений «Онлайн»
+          if (err && !syncing) {
+            icon.style.color = "#f0ad4e";
+            text.textContent = "Помилка";
+          } else {
+            icon.style.color = syncing ? "#f0ad4e" : online ? "#28a745" : "#dc3545";
+            text.textContent = syncing ? "Синх…" : online ? "Онлайн" : "Офлайн";
+          }
+          if (err) {
+            btn.title = err;
+            // Не показуємо червоний банер на всю сторінку — плутає зі збереженням форм.
+            // Текст помилки лишається в підказці кнопки «Синх».
+            btn.dataset.errShown = err;
+          } else {
+            btn.dataset.errShown = "";
+            if (pending > 0 && online) {
+              btn.title =
+                pending +
+                " локальних змін чекають відправки в хмару. Натисніть для синхронізації.";
+            } else if (pending > 0) {
+              btn.title =
+                pending +
+                " змін збережено локально (офлайн). Відправляться, коли з'явиться мережа.";
+            } else {
+              btn.title = data.message || "Журнал синхронізовано";
+            }
+          }
+          if (badge) {
+            if (pending > 0) {
+              badge.textContent = String(pending);
+              badge.classList.remove("d-none");
+            } else {
+              badge.classList.add("d-none");
+            }
+          } else if (pending > 0) {
+            const span = document.createElement("span");
+            span.className = "badge bg-warning text-dark ms-1";
+            span.id = "sync-pending-badge";
+            span.textContent = String(pending);
+            btn.appendChild(span);
+          }
+        }
+
+        function refresh() {
+          fetch("{{ url_for('api_sync_status') }}", {
+            headers: { Accept: "application/json" },
+          })
+            .then(function (r) { return r.json(); })
+            .then(applyStatus)
+            .catch(function () {});
+        }
+
+        btn.addEventListener("click", function () {
+          btn.disabled = true;
+          fetch("{{ url_for('api_sync_now') }}", {
+            method: "POST",
+            headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+              applyStatus(data);
+              btn.disabled = false;
+            })
+            .catch(function () {
+              btn.disabled = false;
+            });
+        });
+
+        refresh();
+        setInterval(refresh, 30000);
+      })();
+
+      (function initAppUpdate() {
+        const banner = document.getElementById("mh-update-banner");
+        const textEl = document.getElementById("mh-update-text");
+        const btnInstall = document.getElementById("mh-update-install");
+        const btnDismiss = document.getElementById("mh-update-dismiss");
+        if (!banner || !textEl || !btnInstall) return;
+
+        const dismissKey = "mh_update_dismissed";
+        let latestVer = "";
+        function dismissedVersion() {
+          try {
+            return sessionStorage.getItem(dismissKey) || "";
+          } catch (e) {
+            return "";
+          }
+        }
+        function setDismissed(ver) {
+          try {
+            sessionStorage.setItem(dismissKey, ver || "");
+          } catch (e) {}
+        }
+
+        function show(data) {
+          if (!data || !data.available) {
+            banner.classList.add("d-none");
+            return;
+          }
+          latestVer = String(data.latest_version || "");
+          if (dismissedVersion() === latestVer) {
+            banner.classList.add("d-none");
+            return;
+          }
+          let msg = "Доступна версія " + latestVer +
+            " (зараз " + (data.current_version || "") + ").";
+          if (data.notes) msg += " " + data.notes;
+          textEl.textContent = msg;
+          banner.classList.remove("d-none");
+        }
+
+        fetch("{{ url_for('api_app_update') }}", { headers: { Accept: "application/json" } })
+          .then(function (r) { return r.json(); })
+          .then(show)
+          .catch(function () {});
+
+        if (btnDismiss) {
+          btnDismiss.addEventListener("click", function () {
+            setDismissed(latestVer || "1");
+            banner.classList.add("d-none");
+          });
+        }
+
+        btnInstall.addEventListener("click", function () {
+          btnInstall.disabled = true;
+          btnInstall.textContent = "Завантаження…";
+          fetch("{{ url_for('api_app_update_install') }}", {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
+          })
+            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+            .then(function (res) {
+              if (res.ok && res.d && res.d.ok) {
+                textEl.textContent =
+                  res.d.message ||
+                  "Інсталятор запущено. Підтвердіть UAC і закрийте програму після оновлення.";
+                btnInstall.textContent = "Запущено";
+              } else {
+                btnInstall.disabled = false;
+                btnInstall.textContent = "Оновити";
+                showAlert((res.d && res.d.error) || "Не вдалося оновити", "danger");
+              }
+            })
+            .catch(function () {
+              btnInstall.disabled = false;
+              btnInstall.textContent = "Оновити";
+              showAlert("Помилка мережі під час оновлення", "danger");
+            });
+        });
+      })();
     </script>
     {% block extra_js %}{% endblock %}
   </body>

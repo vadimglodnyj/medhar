@@ -1,10 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Амбулаторний журнал - Медичний пункт батальйону{% endblock %}
 {% block content %}
-<div class="container">
-  <div class="row justify-content-center">
-    <div class="col-lg-11">
-      <div class="page-header text-center">
+<div class="mh-shell">
+      <div class="page-header">
         <h1><i class="fas fa-book-medical me-2"></i>Амбулаторний журнал</h1>
       </div>
 
@@ -19,26 +17,157 @@
       {% endif %}
       {% endwith %}
 
-      {% if reminders %}
-      <div class="card mb-4 border-warning">
-        <div class="card-header bg-warning-subtle">
-          <strong><i class="fas fa-bell me-1"></i>Нагадування про завершення лікарняного</strong>
-          <span class="text-muted small ms-2">протягом {{ reminder_within }} дн.</span>
-        </div>
-        <ul class="list-group list-group-flush">
-          {% for r in reminders %}
-          <li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <div>
-              <strong>{{ r.pib }}</strong>
-              <span class="text-muted">· {{ r.treatment_title }}</span>
-              <div class="small">{{ r.kind_label }} до <strong>{{ r.end_on }}</strong> ({{ r.days_left_label }})</div>
+      <section class="mh-journal-ops mb-3" aria-label="Операційні панелі">
+        <div class="mh-ops-pair mb-2">
+          <div class="mh-ops-pair-cell">
+            {% if reminders %}
+            <div class="card mh-ops-card border-warning mb-0 h-100">
+              <div class="mh-ops-bar card-header bg-warning-subtle">
+                <button type="button" class="btn btn-link text-decoration-none p-0 text-body fw-semibold"
+                        data-bs-toggle="collapse" data-bs-target="#reminders-body"
+                        aria-expanded="true" aria-controls="reminders-body">
+                  <i class="fas fa-bell me-1"></i>Нагадування
+                  <span class="text-muted small ms-1">за {{ reminder_within }} дн. · {{ reminders|length }}</span>
+                  <i class="fas fa-chevron-down ms-1 small mh-collapse-caret" aria-hidden="true"></i>
+                </button>
+              </div>
+              <div id="reminders-body" class="collapse show">
+                <ul class="list-group list-group-flush mh-ops-scroll mh-ops-scroll-reminders">
+                  {% for r in reminders %}
+                  <li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                    <div class="min-w-0">
+                      <strong>{{ r.pib }}</strong>
+                      <span class="text-muted">· {{ r.treatment_title }}</span>
+                      <div class="small">{{ r.kind_label }} до <strong>{{ r.end_on }}</strong> ({{ r.days_left_label }})</div>
+                    </div>
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patient_treatment_detail', treatment_id=r.treatment_id) }}">Відкрити</a>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
             </div>
-            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patient_treatment_detail', treatment_id=r.treatment_id) }}">Відкрити</a>
-          </li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
+            {% else %}
+            <div class="card mh-ops-card mb-0 h-100">
+              <div class="mh-ops-bar card-header text-muted small">
+                <span><i class="fas fa-bell me-1"></i>Немає завершень лікарняного протягом {{ reminder_within }} дн.</span>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          <div class="mh-ops-pair-cell">
+            <div class="card mh-ops-card mb-0 h-100" id="vlk-queue-card">
+              <div class="mh-ops-bar card-header">
+                <button type="button" class="btn btn-link text-decoration-none p-0 text-body fw-semibold"
+                        data-bs-toggle="collapse" data-bs-target="#vlk-queue-body"
+                        aria-expanded="false" aria-controls="vlk-queue-body">
+                  <i class="fas fa-notes-medical me-1"></i>Подача на ВЛК
+                  {% if vlk_queue %}
+                  <span class="badge text-bg-secondary ms-1">{{ vlk_queue|length }}</span>
+                  {% endif %}
+                  <i class="fas fa-chevron-down ms-1 small mh-collapse-caret" aria-hidden="true"></i>
+                </button>
+                <div class="mh-ops-bar-actions">
+                  <input type="text" class="form-control form-control-sm mh-date" id="vlk-date"
+                         value="{{ vlk_date|e }}" placeholder="дд.мм.рррр" maxlength="10"
+                         inputmode="numeric" aria-label="Дата ВЛК" />
+                  <button type="button" class="btn btn-sm btn-outline-primary" id="vlk-copy-queue-btn" data-no-loader>
+                    Черга
+                  </button>
+                  <button type="button" class="btn btn-sm btn-outline-primary" id="vlk-copy-status-btn" data-no-loader>
+                    Статус
+                  </button>
+                  <button type="button" class="btn btn-sm btn-outline-primary" id="vlk-import-btn" data-no-loader>
+                    Оновити
+                  </button>
+                </div>
+              </div>
+              <div id="vlk-queue-body" class="collapse">
+                <div class="mh-vlk-tiles mh-ops-scroll mh-ops-scroll-vlk" id="vlk-queue-list"
+                     data-open-base="{{ url_for('patient_cards') }}">
+                  {% for item in vlk_queue %}
+                  <article class="mh-vlk-tile mh-vlk-row" draggable="true"
+                           data-id="{{ item.id }}"
+                           data-pib="{{ item.pib|e }}" data-passed="{{ item.passed|join(',') }}"
+                           {% if item.note %}title="{{ item.note|e }}"{% endif %}>
+                    <div class="mh-vlk-tile-grip" aria-hidden="true">⋮⋮</div>
+                    <div class="mh-vlk-tile-main">
+                      <div class="mh-vlk-pib">{{ item.pib }}</div>
+                      {% if item.note %}<div class="mh-vlk-note">{{ item.note }}</div>{% endif %}
+                    </div>
+                    <div class="mh-vlk-tile-actions">
+                      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('outpatient_journal', edit=item.id) }}">Звернення</a>
+                      {% if item.patient_id %}
+                      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('patient_card_detail', patient_id=item.patient_id) }}">Картка</a>
+                      {% else %}
+                      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('patient_cards', q=item.pib) }}">Картка</a>
+                      {% endif %}
+                    </div>
+                  </article>
+                  {% else %}
+                  <div class="text-muted small mh-vlk-empty" id="vlk-queue-empty">Немає активних звернень типу ВЛК. Додайте звернення в журналі.</div>
+                  {% endfor %}
+                </div>
+                <div class="small text-muted px-3 py-2 border-top">Перетягніть плитки, щоб змінити порядок черги.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mh-ops-card mb-0 {% if injury_certs %}border-danger{% endif %}" id="injury-certs">
+          <div class="mh-ops-bar card-header {% if injury_certs %}mh-ops-certs-header{% endif %}">
+            {% if injury_certs %}
+            <button type="button" class="btn btn-link text-decoration-none p-0 text-body fw-semibold"
+                    data-bs-toggle="collapse" data-bs-target="#injury-certs-body"
+                    aria-expanded="false" aria-controls="injury-certs-body">
+              <i class="fas fa-file-pdf me-1"></i>Довідки про обставини травми
+              <i class="fas fa-chevron-down ms-1 small mh-collapse-caret" aria-hidden="true"></i>
+            </button>
+            {% else %}
+            <strong><i class="fas fa-file-pdf me-1"></i>Довідки про обставини травми</strong>
+            {% endif %}
+            <div class="mh-ops-bar-actions">
+              {% if injury_certs %}
+              <span class="badge text-bg-danger">очікують PDF: {{ injury_certs|length }}</span>
+              {% endif %}
+              <button type="button" class="btn btn-sm btn-outline-primary" id="injury-certs-sync-btn"
+                      title="Синхронізувати метадані та PDF довідок з хмарою / Dropbox">
+                <i class="fas fa-sync-alt me-1"></i>Синхронізувати довідки
+              </button>
+            </div>
+          </div>
+          <div id="injury-certs-sync-status" class="alert d-none mb-0 rounded-0 border-0 border-bottom small" role="status"></div>
+          {% if injury_certs %}
+          <div id="injury-certs-body" class="collapse">
+            <ul class="list-group list-group-flush mh-ops-scroll mh-ops-scroll-certs">
+              {% for c in injury_certs %}
+              <li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+                <div class="min-w-0">
+                  <strong>{{ c.pib }}</strong>
+                  <span class="text-muted">· {{ c.title }}</span>
+                  <div class="small">
+                    поранення {{ c.started_on or '—' }}
+                    · без довідки {{ c.waiting_label }}
+                    <span class="text-muted">· один PDF на всі лікування</span>
+                  </div>
+                </div>
+                {% if c.treatment_id %}
+                <a class="btn btn-sm btn-outline-danger"
+                   href="{{ url_for('patient_treatment_detail', treatment_id=c.treatment_id) }}">Завантажити PDF</a>
+                {% else %}
+                <a class="btn btn-sm btn-outline-danger"
+                   href="{{ url_for('patient_card_detail', patient_id=c.patient_id) }}">Завантажити PDF</a>
+                {% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% else %}
+          <div class="px-3 py-2 text-muted small border-top">
+            Немає поранень без довідки про обставини травми.
+          </div>
+          {% endif %}
+        </div>
+      </section>
 
       {% if show_form %}
       <div class="card mb-4">
@@ -50,7 +179,19 @@
           <a href="{% if return_treatment %}{{ url_for('patient_treatment_detail', treatment_id=return_treatment) }}{% else %}{{ url_for('outpatient_journal', q=pib_query or None, unit=unit_filter or None) }}{% endif %}" class="btn btn-sm btn-outline-secondary">Скасувати</a>
         </div>
         <div class="card-body">
-          <form id="outpatient-form" method="POST" enctype="multipart/form-data">
+          {% if form_errors|default([]) %}
+          <div class="alert alert-danger" id="outpatient-form-errors" role="alert">
+            <strong>Запис не збережено.</strong> Виправте:
+            <ul class="mb-0 mt-1">
+              {% for err in form_errors %}
+              <li>{{ err }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% else %}
+          <div class="alert alert-danger d-none" id="outpatient-form-errors" role="alert"></div>
+          {% endif %}
+          <form id="outpatient-form" method="POST" enctype="multipart/form-data" data-no-loader>
             <input type="hidden" name="action" value="save" />
             {% if edit.id %}
             <input type="hidden" name="id" value="{{ edit.id }}" />
@@ -72,8 +213,8 @@
               </div>
               <div class="col-md-4 mb-3">
                 <label for="visit_date" class="form-label">Дата звернення</label>
-                <input type="text" class="form-control" id="visit_date" name="date"
-                  value="{{ edit.date or today_ui }}" placeholder="дд.мм.рррр" required />
+                <input type="text" class="form-control mh-date" id="visit_date" name="date"
+                  value="{{ edit.date or today_ui }}" placeholder="дд.мм.рррр" inputmode="numeric" required />
               </div>
             </div>
             <input type="hidden" id="rank_unit" name="rank_unit" value="{{ edit.rank_unit }}" />
@@ -87,8 +228,16 @@
                 <option value="new">+ Нове лікування…</option>
               </select>
               <div class="mt-2 d-none" id="new-treatment-wrap">
-                <input type="text" class="form-control" id="new_treatment_title" name="new_treatment_title"
-                  placeholder="Назва лікування (напр. ГРВІ, люмбалгія)" />
+                <input type="text" class="form-control mb-2" id="new_treatment_title" name="new_treatment_title"
+                  placeholder="Назва лікування (напр. ГРВІ, ВТ 19.07.2026)" />
+                <label class="form-label small mb-1" for="treatment_cause">Характер</label>
+                <select id="treatment_cause" name="treatment_cause" class="form-select">
+                  <option value="">— бойове чи соматичне —</option>
+                  {% for key, label in treatment_cause_options %}
+                  <option value="{{ key }}" {% if edit.treatment_cause == key %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+                <div class="form-text">Бойове — довідка про обставини травми і оплата. Соматичне — ні.</div>
               </div>
               <div class="form-text">Оберіть існуюче лікування пацієнта або створіть нове.</div>
             </div>
@@ -145,13 +294,13 @@
               <div class="row">
                 <div class="col-md-4 mb-3 d-none" id="field-leave-start-wrap">
                   <label for="leave_start" class="form-label" id="leave-start-label">Дата</label>
-                  <input type="text" class="form-control" id="leave_start" name="leave_start"
-                    value="{{ edit.leave_start }}" placeholder="дд.мм.рррр" />
+                  <input type="text" class="form-control mh-date" id="leave_start" name="leave_start"
+                    value="{{ edit.leave_start }}" placeholder="дд.мм.рррр" inputmode="numeric" />
                 </div>
                 <div class="col-md-4 mb-3 d-none" id="field-leave-end-wrap">
                   <label for="leave_end" class="form-label" id="leave-end-label">по</label>
-                  <input type="text" class="form-control" id="leave_end" name="leave_end"
-                    value="{{ edit.leave_end }}" placeholder="дд.мм.рррр" />
+                  <input type="text" class="form-control mh-date" id="leave_end" name="leave_end"
+                    value="{{ edit.leave_end }}" placeholder="дд.мм.рррр" inputmode="numeric" />
                 </div>
                 <div class="col-md-4 mb-3 d-none" id="field-leave-days-wrap">
                   <label for="leave_days" class="form-label">к-ть днів</label>
@@ -185,12 +334,26 @@
                   placeholder="Рекомендації після огляду">{{ edit.exam_result }}</textarea>
               </div>
 
+              <div class="mb-3 d-none" id="field-vlk-docs-wrap">
+                <div class="form-label">Пройдені лікарі / тести</div>
+                <div class="mh-vlk-visit-docs" role="group" aria-label="Пройдені лікарі">
+                  {% for doc in vlk_doctors %}
+                  <label class="form-check form-check-inline mb-2">
+                    <input class="form-check-input mh-vlk-visit-doc" type="checkbox" name="vlk_passed"
+                           value="{{ doc.id }}"
+                           {% if doc.id in (edit.vlk_passed_ids or []) %}checked{% endif %} />
+                    <span class="form-check-label">{{ doc.label }}</span>
+                  </label>
+                  {% endfor %}
+                </div>
+              </div>
+
               <div class="mb-0">
                 <label for="notes" class="form-label">Примітки</label>
                 <input type="text" class="form-control" id="notes" name="notes" value="{{ edit.notes }}" />
               </div>
             </div>
-            <button type="submit" class="btn btn-primary">
+            <button type="submit" class="btn btn-primary" id="outpatient-save-btn">
               <i class="fas fa-save me-1"></i>{% if edit.id %}Зберегти{% else %}Додати{% endif %}
             </button>
           </form>
@@ -201,7 +364,7 @@
       <div class="card mb-4">
         <div class="card-body py-3 border-bottom">
           <div class="d-flex flex-wrap align-items-end gap-2">
-            <form method="GET" class="d-flex flex-wrap align-items-end gap-2 flex-grow-1 m-0" id="journal-filter-form">
+            <form method="GET" class="d-flex flex-wrap align-items-end gap-2 flex-grow-1 m-0" id="journal-filter-form" data-no-loader>
               {% if show_form and edit.id %}
               <input type="hidden" name="edit" value="{{ edit.id }}" />
               {% elif show_form %}
@@ -228,84 +391,24 @@
             </form>
 
             {% if not show_form %}
-            <a href="{{ url_for('outpatient_journal', new=1, q=pib_query or None, unit=unit_filter or None) }}" class="btn btn-primary">
+            <a href="{{ url_for('outpatient_journal', new=1, q=pib_query or None, unit=unit_filter or None) }}"
+               class="btn btn-primary" data-journal-filter-link>
               <i class="fas fa-plus me-1"></i>Звернення
             </a>
             {% endif %}
           </div>
         </div>
 
-        <div class="card-body p-0">
-          {% if records %}
-          <div class="table-responsive mh-journal-wrap">
-            <table class="table table-hover mb-0 mh-journal-table">
-              <thead>
-                <tr>
-                  <th class="mh-col-num">№</th>
-                  <th class="mh-col-date">Дата</th>
-                  <th class="mh-col-pib">ПІБ</th>
-                  <th class="mh-col-diag">Діагноз</th>
-                  <th class="mh-col-lpz">ЛПЗ</th>
-                  <th class="mh-col-type">Тип</th>
-                  <th class="mh-col-period">з</th>
-                  <th class="mh-col-period">по</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in records %}
-                <tr>
-                  <td class="mh-col-num">{{ r.id }}</td>
-                  <td class="mh-col-date">{{ r.date }}</td>
-                  <td class="mh-col-pib">
-                    {% if r.patient_id %}
-                    <a href="{{ url_for('patient_card_detail', patient_id=r.patient_id) }}">{{ r.pib }}</a>
-                    {% else %}
-                    {{ r.pib }}
-                    {% endif %}
-                  </td>
-                  <td class="mh-col-diag mh-cell-clamp">
-                    {% if r.diagnosis %}
-                    <div class="mh-clamp" data-mh-clamp>
-                      <div class="mh-clamp-text">{{ r.diagnosis }}</div>
-                      <button type="button" class="btn btn-link btn-sm p-0 mh-clamp-toggle d-none" aria-expanded="false">Показати більше</button>
-                    </div>
-                    {% else %}<span class="text-muted">—</span>{% endif %}
-                  </td>
-                  <td class="mh-col-lpz">{{ r.lpz or '—' }}</td>
-                  <td class="mh-col-type">
-                    {% if r.care_type_label %}
-                    <span class="mh-type-badge">{{ r.care_type_label }}</span>
-                    {% if r.wa_event_label %}<span class="mh-type-event">{{ r.wa_event_label }}</span>{% endif %}
-                    {% else %}<span class="text-muted">—</span>{% endif %}
-                  </td>
-                  <td class="mh-col-period">
-                    {% if r.care_type in ('consultation', 'referral') %}
-                      {{ r.date or '—' }}
-                    {% else %}
-                      {{ r.leave_start or '—' }}
-                    {% endif %}
-                  </td>
-                  <td class="mh-col-period">
-                    {% if r.care_type in ('consultation', 'referral') %}
-                      —
-                    {% else %}
-                      {{ r.leave_end or '—' }}
-                    {% endif %}
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
+        <div class="card-body p-0 mh-rows-host" aria-busy="false" id="journal-rows-host">
+          <div id="journal-rows">
+            {% include "partials/outpatient_journal_rows.html" %}
           </div>
-          {% elif journal_count == 0 %}
-          <p class="text-muted p-3 mb-0">Поки немає записів. Натисніть «Звернення», щоб додати перший.</p>
-          {% else %}
-          <p class="text-muted p-3 mb-0">Нічого не знайдено.</p>
-          {% endif %}
+          <div class="mh-rows-veil" aria-hidden="true">
+            <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+            <span class="small text-muted">Оновлюємо…</span>
+          </div>
         </div>
       </div>
-    </div>
-  </div>
 </div>
 {% endblock %}
 
@@ -339,16 +442,62 @@
     color: var(--mh-primary, #0d8a8a);
   }
   .mh-clamp-toggle:hover { text-decoration: underline; }
+  .mh-rows-host { position: relative; min-height: 4rem; }
+  .mh-rows-veil {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0.5rem;
+    padding-top: 1.75rem;
+    background: rgba(255, 255, 255, 0.72);
+    border-radius: 0 0 var(--mh-radius, 0.85rem) var(--mh-radius, 0.85rem);
+    z-index: 3;
+  }
+  .mh-rows-host[aria-busy="true"] .mh-rows-veil { display: flex; }
+  .mh-rows-host[aria-busy="true"] #journal-rows { opacity: 0.55; }
+  .mh-vlk-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .mh-vlk-tile.mh-vlk-row {
+    flex-wrap: nowrap;
+    gap: 0.75rem;
+  }
+  .mh-vlk-fields {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .mh-vlk-pib {
+    font-weight: 700;
+  }
+  .mh-vlk-note {
+    color: var(--mh-text-muted, #5a7478);
+    font-size: 0.82rem;
+  }
+  .mh-vlk-row .btn { flex-shrink: 0; }
+  .mh-vlk-visit-docs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem 0.85rem;
+  }
 </style>
 {% endblock %}
 
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/date_input.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
 <script src="{{ url_for('static', filename='js/lpz_tom_select.js') }}"></script>
 <script>
-  (function initTextClamps() {
+  function initTextClamps() {
     document.querySelectorAll("[data-mh-clamp]").forEach((wrap) => {
       const text = wrap.querySelector(".mh-clamp-text");
       const btn = wrap.querySelector(".mh-clamp-toggle");
@@ -362,7 +511,9 @@
         btn.textContent = open ? "Згорнути" : "Показати більше";
       });
     });
-  })();
+  }
+
+  initTextClamps();
 
   (function initCareWaEvent() {
     const careSel = document.getElementById("care_type");
@@ -382,6 +533,7 @@
       leaveDays: document.getElementById("field-leave-days-wrap"),
       diagnosis: document.getElementById("field-diagnosis-wrap"),
       exam: document.getElementById("field-exam-wrap"),
+      vlkDocs: document.getElementById("field-vlk-docs-wrap"),
       referralLabel: document.getElementById("referral-label"),
       lpzLabel: document.getElementById("lpz-label"),
       leaveStartLabel: document.getElementById("leave-start-label"),
@@ -402,6 +554,20 @@
 
     function setText(el, text) {
       if (el) el.textContent = text;
+    }
+
+    function setFieldEnabled(el, on) {
+      if (!el) return;
+      el.disabled = !on;
+      if (el.tomselect) {
+        if (on) {
+          el.tomselect.enable();
+          // Tom Select інколи лишає lock після init на disabled select
+          if (typeof el.tomselect.unlock === "function") el.tomselect.unlock();
+        } else {
+          el.tomselect.disable();
+        }
+      }
     }
 
     function refillEvents() {
@@ -448,11 +614,15 @@
       show(els.leaveDays, false);
       show(els.diagnosis, false);
       show(els.exam, false);
+      show(els.vlkDocs, false);
+      document.querySelectorAll(".mh-vlk-visit-doc").forEach(function (cb) {
+        cb.disabled = true;
+      });
 
-      if (els.leaveStartInput) els.leaveStartInput.disabled = false;
-      if (els.leaveEndInput) els.leaveEndInput.disabled = false;
-      if (els.leaveDaysInput) els.leaveDaysInput.disabled = false;
-      if (els.fromLpzInput) els.fromLpzInput.disabled = true;
+      if (els.leaveStartInput) setFieldEnabled(els.leaveStartInput, true);
+      if (els.leaveEndInput) setFieldEnabled(els.leaveEndInput, true);
+      if (els.leaveDaysInput) setFieldEnabled(els.leaveDaysInput, true);
+      setFieldEnabled(els.fromLpzInput, false);
 
       if (!hasType) return;
 
@@ -464,22 +634,38 @@
         setText(els.referralLabel, kind === "referral" ? "До якого спеціаліста" : "Ким консультований");
         setText(els.lpzLabel, kind === "referral" ? "Куди направлений" : "Де консультований");
         setText(els.examLabel, "Рекомендації");
-        if (els.leaveStartInput) { els.leaveStartInput.value = ""; els.leaveStartInput.disabled = true; }
-        if (els.leaveEndInput) { els.leaveEndInput.value = ""; els.leaveEndInput.disabled = true; }
-        if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; els.leaveDaysInput.disabled = true; }
+        if (els.leaveEndInput) { els.leaveEndInput.value = ""; setFieldEnabled(els.leaveEndInput, false); }
+        if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; setFieldEnabled(els.leaveDaysInput, false); }
+        if (kind === "referral") {
+          show(els.leaveStart, true);
+          setText(els.leaveStartLabel, "Дата направлення");
+          if (els.leaveStartInput) {
+            setFieldEnabled(els.leaveStartInput, true);
+            if (!els.leaveStartInput.value && els.visitDate) {
+              els.leaveStartInput.value = els.visitDate.value || "";
+            }
+          }
+        } else if (els.leaveStartInput) {
+          els.leaveStartInput.value = "";
+          setFieldEnabled(els.leaveStartInput, false);
+        }
         return;
       }
 
       if (kind === "vlk") {
         show(els.leaveStart, true);
         show(els.lpz, true);
+        show(els.vlkDocs, true);
+        document.querySelectorAll(".mh-vlk-visit-doc").forEach(function (cb) {
+          cb.disabled = false;
+        });
         setText(els.leaveStartLabel, "Дата початку");
         setText(els.lpzLabel, "Місце проходження ВЛК");
         if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
           els.leaveStartInput.value = els.visitDate.value || "";
         }
-        if (els.leaveEndInput) { els.leaveEndInput.value = ""; els.leaveEndInput.disabled = true; }
-        if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; els.leaveDaysInput.disabled = true; }
+        if (els.leaveEndInput) { els.leaveEndInput.value = ""; setFieldEnabled(els.leaveEndInput, false); }
+        if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; setFieldEnabled(els.leaveDaysInput, false); }
         return;
       }
 
@@ -491,29 +677,39 @@
         if (ev === "open") {
           setText(els.lpzLabel, "Де відкрив");
           show(els.leaveStart, true);
-          setText(els.leaveStartLabel, "Дата відкриття");
+          show(els.leaveEnd, true);
+          show(els.leaveDays, true);
+          setText(els.leaveStartLabel, "Період з");
+          setText(els.leaveEndLabel, "по");
           if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
             els.leaveStartInput.value = els.visitDate.value || "";
           }
-          if (els.leaveEndInput) els.leaveEndInput.disabled = true;
-          if (els.leaveDaysInput) els.leaveDaysInput.disabled = true;
+          if (els.leaveEndInput) setFieldEnabled(els.leaveEndInput, true);
+          if (els.leaveDaysInput) setFieldEnabled(els.leaveDaysInput, true);
         } else if (ev === "extend") {
           setText(els.lpzLabel, "Де продовжив");
+          show(els.leaveStart, true);
           show(els.leaveEnd, true);
-          setText(els.leaveEndLabel, "Дата по яке продовжив");
+          show(els.leaveDays, true);
+          setText(els.leaveStartLabel, "Період з");
+          setText(els.leaveEndLabel, "по");
           if (els.leaveEndInput && !els.leaveEndInput.value && els.visitDate) {
             els.leaveEndInput.value = els.visitDate.value || "";
           }
-          if (els.leaveStartInput) els.leaveStartInput.disabled = false;
-          if (els.leaveDaysInput) els.leaveDaysInput.disabled = true;
+          if (els.leaveStartInput) setFieldEnabled(els.leaveStartInput, true);
+          if (els.leaveDaysInput) setFieldEnabled(els.leaveDaysInput, true);
         } else if (ev === "discharge") {
           setText(els.lpzLabel, "Де завершив");
+          show(els.leaveStart, true);
           show(els.leaveEnd, true);
-          setText(els.leaveEndLabel, "Дата завершення");
+          show(els.leaveDays, true);
+          setText(els.leaveStartLabel, "Період з");
+          setText(els.leaveEndLabel, "по");
           if (els.leaveEndInput && !els.leaveEndInput.value && els.visitDate) {
             els.leaveEndInput.value = els.visitDate.value || "";
           }
-          if (els.leaveDaysInput) els.leaveDaysInput.disabled = true;
+          if (els.leaveStartInput) setFieldEnabled(els.leaveStartInput, true);
+          if (els.leaveDaysInput) setFieldEnabled(els.leaveDaysInput, true);
         } else {
           setText(els.lpzLabel, "Де");
         }
@@ -530,20 +726,20 @@
           if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
             els.leaveStartInput.value = els.visitDate.value || "";
           }
-          if (els.leaveEndInput) { els.leaveEndInput.disabled = true; }
-          if (els.leaveDaysInput) { els.leaveDaysInput.disabled = true; }
+          if (els.leaveEndInput) setFieldEnabled(els.leaveEndInput, false);
+          if (els.leaveDaysInput) setFieldEnabled(els.leaveDaysInput, false);
         } else if (ev === "extend") {
           show(els.fromLpz, true);
           show(els.lpz, true);
           show(els.leaveStart, true);
           setText(els.lpzLabel, "Куди переведений");
           setText(els.leaveStartLabel, "Дата переводу");
-          if (els.fromLpzInput) els.fromLpzInput.disabled = false;
+          setFieldEnabled(els.fromLpzInput, true);
           if (els.leaveStartInput && !els.leaveStartInput.value && els.visitDate) {
             els.leaveStartInput.value = els.visitDate.value || "";
           }
-          if (els.leaveEndInput) { els.leaveEndInput.value = ""; els.leaveEndInput.disabled = true; }
-          if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; els.leaveDaysInput.disabled = true; }
+          if (els.leaveEndInput) { els.leaveEndInput.value = ""; setFieldEnabled(els.leaveEndInput, false); }
+          if (els.leaveDaysInput) { els.leaveDaysInput.value = ""; setFieldEnabled(els.leaveDaysInput, false); }
         } else if (ev === "discharge") {
           show(els.lpz, true);
           setText(els.lpzLabel, "З якого закладу виписаний");
@@ -622,16 +818,85 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
+    const certSyncBtn = document.getElementById("injury-certs-sync-btn");
+    const certSyncStatus = document.getElementById("injury-certs-sync-status");
+    if (certSyncBtn) {
+      certSyncBtn.addEventListener("click", function () {
+        const prev = certSyncBtn.innerHTML;
+        certSyncBtn.disabled = true;
+        certSyncBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Синхронізація…';
+        if (certSyncStatus) {
+          certSyncStatus.className = "alert alert-secondary mb-0 rounded-0 border-0 border-bottom small";
+          certSyncStatus.textContent = "Обмін з хмарою та Dropbox…";
+          certSyncStatus.classList.remove("d-none");
+        }
+        fetch("{{ url_for('api_injury_certs_sync') }}", {
+          method: "POST",
+          headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json",
+          },
+          credentials: "same-origin",
+        })
+          .then(function (res) {
+            return res.json().then(function (data) {
+              return { okHttp: res.ok, data: data || {} };
+            }).catch(function () {
+              return { okHttp: false, data: { message: "Некоректна відповідь сервера." } };
+            });
+          })
+          .then(function (pack) {
+            const data = pack.data || {};
+            const msg = data.message || data.error || "Готово.";
+            if (certSyncStatus) {
+              certSyncStatus.className =
+                "alert mb-0 rounded-0 border-0 border-bottom small " +
+                (data.ok ? "alert-success" : "alert-warning");
+              certSyncStatus.textContent = msg;
+              certSyncStatus.classList.remove("d-none");
+            }
+            if (data.ok || typeof data.pending === "number") {
+              // оновити бейдж «очікують PDF»
+              const badge = document.querySelector("#injury-certs .badge.text-bg-danger");
+              if (badge) {
+                if (data.pending > 0) {
+                  badge.textContent = "очікують PDF: " + data.pending;
+                  badge.classList.remove("d-none");
+                } else {
+                  badge.classList.add("d-none");
+                }
+              }
+            }
+            if (data.ok && data.pending === 0) {
+              // перезавантажити секцію — прибрати список попереджень
+              window.setTimeout(function () { window.location.reload(); }, 700);
+            }
+          })
+          .catch(function () {
+            if (certSyncStatus) {
+              certSyncStatus.className = "alert alert-danger mb-0 rounded-0 border-0 border-bottom small";
+              certSyncStatus.textContent = "Мережева помилка синхронізації довідок.";
+              certSyncStatus.classList.remove("d-none");
+            }
+          })
+          .finally(function () {
+            certSyncBtn.disabled = false;
+            certSyncBtn.innerHTML = prev;
+          });
+      });
+    }
+
     const outpatientForm = document.getElementById("outpatient-form");
     if (outpatientForm) {
+      initDateInputs("#outpatient-form");
       initFormTomSelects("#outpatient-form", {
-        skipIds: ["pib", "rank_unit", "diagnosis", "referral_to", "lpz", "notes", "treatment_id", "exam_result", "new_treatment_title", "care_type", "wa_event", "leave_start", "leave_end", "leave_days", "visit_date", "date", "gemini-scan-file"],
+        skipIds: ["pib", "rank_unit", "diagnosis", "referral_to", "lpz", "notes", "treatment_id", "exam_result", "new_treatment_title", "treatment_cause", "care_type", "wa_event", "leave_start", "leave_end", "leave_days", "visit_date", "date", "gemini-scan-file"],
       });
       initPibTomSelect({
         selectId: "pib",
         context: "outpatient",
         allowCreate: true,
-        placeholder: "Почніть вводити ПІБ (РКЧ → база лікувань)...",
+        placeholder: "Пошук: картотека → base → РКЧ → лікування...",
         onSelect: function (item) {
           showPibInfoAlert(item);
           loadTreatmentsForPib((item && item.value) || "");
@@ -763,11 +1028,46 @@
         recentKey: "lpz_recent_outpatient",
         placeholder: "Почніть вводити назву ЛПЗ...",
       });
+      // Перед ініціалізацією Tom Select — не лишати native select disabled
+      (function prepareFromLpz() {
+        const fromEl = document.getElementById("from_lpz");
+        const waEv = document.getElementById("wa_event");
+        const careEl = document.getElementById("care_type");
+        const preferred = waEv ? (waEv.getAttribute("data-selected") || waEv.value || "") : "";
+        if (
+          fromEl &&
+          careEl &&
+          careEl.value === "inpatient" &&
+          preferred === "extend"
+        ) {
+          fromEl.disabled = false;
+        }
+      })();
+      // from_lpz: не вмикати change доки Tom Select не готовий (інакше лишається disabled)
       initLpzTomSelect({
         selectId: "from_lpz",
         listUrl: "/api/lpz_list",
         recentKey: "lpz_recent_outpatient_from",
         placeholder: "Почніть вводити назву ЛПЗ...",
+      }).then(function () {
+        const fromEl = document.getElementById("from_lpz");
+        const waEv = document.getElementById("wa_event");
+        const careEl = document.getElementById("care_type");
+        if (waEv) waEv.dispatchEvent(new Event("change"));
+        // гарантія для «Переведений»
+        if (
+          fromEl &&
+          careEl &&
+          careEl.value === "inpatient" &&
+          waEv &&
+          waEv.value === "extend"
+        ) {
+          fromEl.disabled = false;
+          if (fromEl.tomselect) {
+            fromEl.tomselect.enable();
+            if (typeof fromEl.tomselect.unlock === "function") fromEl.tomselect.unlock();
+          }
+        }
       });
 
       const scanBtn = document.getElementById("gemini-scan-btn");
@@ -853,9 +1153,212 @@
           });
       });
 
-      outpatientForm.addEventListener("submit", function () {
+      outpatientForm.addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        // disabled select не потрапляє в FormData — увімкнути видиме «Звідки переведений»
+        const fromWrap = document.getElementById("field-from-lpz-wrap");
+        const fromEl = document.getElementById("from_lpz");
+        if (fromWrap && !fromWrap.classList.contains("d-none") && fromEl) {
+          fromEl.disabled = false;
+          if (fromEl.tomselect) fromEl.tomselect.enable();
+        }
         if (typeof flushTomInputs === "function") flushTomInputs(outpatientForm);
         syncPendingGeminiInputs();
+
+        const errBox = document.getElementById("outpatient-form-errors");
+        const saveBtn = document.getElementById("outpatient-save-btn");
+        const careWaMap = {{ care_wa_events|tojson }};
+
+        function showErrors(list) {
+          if (!errBox) return;
+          let items = [];
+          if (Array.isArray(list)) {
+            items = list.map(function (e) { return String(e || "").trim(); }).filter(Boolean);
+          } else if (list) {
+            items = [String(list).trim()].filter(Boolean);
+          }
+          if (!items.length) {
+            errBox.classList.add("d-none");
+            errBox.innerHTML = "";
+            return;
+          }
+          errBox.classList.remove("d-none");
+          errBox.innerHTML =
+            "<strong>Запис не збережено.</strong> Виправте:<ul class=\"mb-0 mt-1\">" +
+            items.map(function (e) { return "<li>" + String(e).replace(/</g, "&lt;") + "</li>"; }).join("") +
+            "</ul>";
+          errBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+
+        function val(id) {
+          const el = document.getElementById(id);
+          if (!el) return "";
+          if (el.tomselect && typeof el.tomselect.getValue === "function") {
+            return String(el.tomselect.getValue() || "").trim();
+          }
+          return String(el.value || "").trim();
+        }
+        function parseUa(raw) {
+          return /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.test(String(raw || "").trim());
+        }
+
+        const errors = [];
+        const pib = val("pib");
+        const date = val("visit_date") || val("date");
+        const care = val("care_type");
+        const wa = val("wa_event");
+        const tid = val("treatment_id");
+        const newTitle = val("new_treatment_title");
+        const cause = val("treatment_cause");
+
+        if (!pib) errors.push("Вкажіть ПІБ.");
+        if (!date) errors.push("Вкажіть дату звернення.");
+        else if (!parseUa(date)) errors.push("Дата звернення має бути у форматі дд.мм.рррр.");
+        if (!care) errors.push("Оберіть тип дії.");
+        if (tid === "new" || (!tid && newTitle)) {
+          if (!newTitle) errors.push("Вкажіть назву нового лікування.");
+          if (!cause) errors.push("Оберіть характер лікування: бойове або соматичне.");
+        }
+        if (care && careWaMap[care] && careWaMap[care].length && !wa) {
+          errors.push("Оберіть варіант / статус дії.");
+        }
+
+        function needDate(id, label) {
+          const v = val(id);
+          if (!v) errors.push("Вкажіть: " + label + ".");
+          else if (!parseUa(v)) errors.push(label + " має бути у форматі дд.мм.рррр.");
+        }
+
+        if (care === "consultation" || care === "referral") {
+          if (!val("referral_to")) {
+            errors.push(care === "consultation" ? "Вкажіть спеціаліста." : "Вкажіть, до якого спеціаліста направлення.");
+          }
+          if (!val("lpz")) {
+            errors.push(care === "consultation" ? "Вкажіть ЛПЗ, де консультований." : "Вкажіть, куди направлений.");
+          }
+          if (care === "referral") needDate("leave_start", "Дата направлення");
+        } else if (care === "vlk") {
+          needDate("leave_start", "Дата початку ВЛК");
+          if (!val("lpz")) errors.push("Вкажіть місце проходження ВЛК.");
+        } else if (care === "outpatient" || care === "day_hospital") {
+          needDate("leave_start", "Початок періоду");
+          needDate("leave_end", "Кінець періоду");
+          if (!val("lpz")) errors.push("Вкажіть ЛПЗ.");
+        } else if (care === "inpatient") {
+          if (wa === "open") {
+            needDate("leave_start", "Дата госпіталізації");
+            if (!val("lpz")) errors.push("Вкажіть, де госпіталізований.");
+          } else if (wa === "extend") {
+            needDate("leave_start", "Дата переводу");
+            if (!val("lpz")) errors.push("Вкажіть ЛПЗ, куди переведений.");
+            if (!val("from_lpz")) errors.push("Вкажіть, звідки переведений.");
+          } else if (wa === "discharge") {
+            needDate("leave_start", "Початок стаціонару");
+            needDate("leave_end", "Дата виписки");
+            if (!val("lpz")) errors.push("Вкажіть ЛПЗ виписки.");
+          } else if (!wa) {
+            /* already reported */
+          }
+        } else if (care === "rehab" || care === "vacation" || care === "abroad" || care === "phys_exempt") {
+          needDate("leave_start", "Дата початку");
+          if (care !== "phys_exempt" && !val("lpz")) errors.push("Вкажіть ЛПЗ.");
+        }
+
+        if (errors.length) {
+          showErrors(errors);
+          return;
+        }
+        showErrors([]);
+
+        const fd = new FormData(outpatientForm);
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.dataset.prevHtml = saveBtn.innerHTML;
+          saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Збереження…';
+        }
+        if (typeof showLoading === "function") showLoading("Збереження звернення…");
+
+        // name="action" перекриває form.action → "[object HTMLInputElement]" → 404
+        const postUrl =
+          outpatientForm.getAttribute("action") ||
+          window.location.pathname + window.location.search ||
+          window.location.href;
+        fetch(postUrl, {
+          method: "POST",
+          body: fd,
+          headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json",
+          },
+          credentials: "same-origin",
+        })
+          .then(function (res) {
+            const ct = (res.headers.get("content-type") || "").toLowerCase();
+            if (ct.indexOf("application/json") === -1) {
+              return {
+                okHttp: res.ok,
+                status: res.status,
+                data: {
+                  ok: false,
+                  error:
+                    "Сервер не повернув JSON (HTTP " +
+                    res.status +
+                    "). Оновіть програму або спробуйте ще раз.",
+                },
+              };
+            }
+            return res.json().then(function (data) {
+              return { okHttp: res.ok, status: res.status, data: data || {} };
+            }).catch(function () {
+              return {
+                okHttp: res.ok,
+                status: res.status,
+                data: {
+                  ok: false,
+                  error: "Некоректна відповідь сервера (HTTP " + res.status + ").",
+                },
+              };
+            });
+          })
+          .then(function (pack) {
+            const data = pack.data || {};
+            if (data.ok && data.redirect) {
+              window.location.href = data.redirect;
+              return;
+            }
+            let serverErrors = [];
+            if (Array.isArray(data.errors)) {
+              serverErrors = data.errors.map(function (e) {
+                return String(e || "").trim();
+              }).filter(Boolean);
+            } else if (data.errors) {
+              serverErrors = [String(data.errors).trim()].filter(Boolean);
+            }
+            if (!serverErrors.length && data.error) {
+              serverErrors = [String(data.error).trim()];
+            }
+            if (!serverErrors.length) {
+              serverErrors = [
+                pack.okHttp
+                  ? "Не вдалося зберегти. Перевірте поля і спробуйте ще раз."
+                  : "Сервер повернув помилку (" + pack.status + "). Запис не збережено."
+              ];
+            }
+            showErrors(serverErrors);
+            if (typeof hideLoading === "function") hideLoading();
+            if (saveBtn) {
+              saveBtn.disabled = false;
+              if (saveBtn.dataset.prevHtml) saveBtn.innerHTML = saveBtn.dataset.prevHtml;
+            }
+          })
+          .catch(function () {
+            showErrors(["Мережева помилка. Запис не збережено — спробуйте ще раз."]);
+            if (typeof hideLoading === "function") hideLoading();
+            if (saveBtn) {
+              saveBtn.disabled = false;
+              if (saveBtn.dataset.prevHtml) saveBtn.innerHTML = saveBtn.dataset.prevHtml;
+            }
+          });
       });
     }
 
@@ -870,14 +1373,92 @@
       return typed;
     }
 
-    function submitJournalFilter(ts) {
-      if (!filterForm) return;
-      if (qHidden) qHidden.value = currentPibQuery(ts);
-      if (qSelect) qSelect.disabled = false;
-      filterForm.submit();
+    const rowsHost = document.getElementById("journal-rows-host");
+    const rowsBox = document.getElementById("journal-rows");
+    const unitSelect = document.getElementById("journal-unit");
+    let rowsRequest = null;
+
+    function filterParams(ts) {
+      const params = new URLSearchParams();
+      const q = currentPibQuery(ts);
+      if (q) params.set("q", q);
+      if (unitSelect && unitSelect.value) params.set("unit", unitSelect.value);
+      return params;
     }
 
-    document.getElementById("journal-unit")?.addEventListener("change", function () {
+    // Адреса й посилання мають нести поточний фільтр: перезавантаження чи
+    // перехід «Звернення» не повинні його скидати.
+    function syncFilterInLinks(params) {
+      const urlParams = new URLSearchParams(params.toString());
+      const current = new URLSearchParams(window.location.search);
+      ["edit", "new", "return_treatment"].forEach(function (name) {
+        const value = current.get(name);
+        if (value !== null) urlParams.set(name, value);
+      });
+      const search = urlParams.toString();
+      window.history.replaceState(
+        null,
+        "",
+        search ? window.location.pathname + "?" + search : window.location.pathname
+      );
+
+      document.querySelectorAll("[data-journal-filter-link]").forEach(function (link) {
+        const url = new URL(link.href, window.location.href);
+        url.searchParams.delete("q");
+        url.searchParams.delete("unit");
+        params.forEach(function (value, name) {
+          url.searchParams.set(name, value);
+        });
+        link.href = url.pathname + (url.search || "");
+      });
+    }
+
+    function fullPageFilter(params) {
+      window.location.href = params.toString()
+        ? "{{ url_for('outpatient_journal') }}?" + params.toString()
+        : "{{ url_for('outpatient_journal') }}";
+    }
+
+    // Фільтр оновлює лише таблицю: повне перезавантаження зайве й помітно повільніше.
+    function submitJournalFilter(ts) {
+      if (qHidden) qHidden.value = currentPibQuery(ts);
+      const params = filterParams(ts);
+      if (!rowsHost || !rowsBox || typeof AbortController === "undefined") {
+        fullPageFilter(params);
+        return;
+      }
+
+      if (rowsRequest) rowsRequest.abort();
+      rowsRequest = new AbortController();
+      rowsHost.setAttribute("aria-busy", "true");
+
+      fetch("{{ url_for('outpatient_journal_rows') }}?" + params.toString(), {
+        signal: rowsRequest.signal,
+        headers: { "X-Requested-With": "fetch" },
+      })
+        .then(function (response) {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.text();
+        })
+        .then(function (html) {
+          rowsBox.innerHTML = html;
+          initTextClamps();
+          syncFilterInLinks(params);
+          rowsHost.setAttribute("aria-busy", "false");
+        })
+        .catch(function (error) {
+          if (error && error.name === "AbortError") return;
+          rowsHost.setAttribute("aria-busy", "false");
+          fullPageFilter(params);
+        });
+    }
+
+    filterForm?.addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitJournalFilter(qSelect && qSelect.tomselect);
+    });
+
+    unitSelect?.addEventListener("change", function () {
       submitJournalFilter(qSelect && qSelect.tomselect);
     });
 
@@ -967,5 +1548,237 @@
       });
     }
   });
+
+  (function initVlkQueue() {
+    const list = document.getElementById("vlk-queue-list");
+    if (!list) return;
+    const doctors = {{ vlk_doctors|tojson }};
+    const dateInput = document.getElementById("vlk-date");
+    const cardsBase = list.getAttribute("data-open-base") || "/patient-cards";
+    const editBase = "{{ url_for('outpatient_journal') }}";
+
+    function jsonHeaders() {
+      return {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+      };
+    }
+
+    function vlkDate() {
+      return dateInput ? (dateInput.value || "").trim() : "";
+    }
+
+    function copyText(text) {
+      const value = String(text || "").trim();
+      if (!value) {
+        showAlert("Немає кого копіювати", "danger");
+        return;
+      }
+      const done = function () { showAlert("Скопійовано в буфер — можна вставляти у WhatsApp", "success"); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(done).catch(function () {
+          fallbackCopy(value);
+          done();
+        });
+        return;
+      }
+      fallbackCopy(value);
+      done();
+    }
+
+    function fallbackCopy(text) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      ta.remove();
+    }
+
+    function rowPib(row) {
+      return (row.getAttribute("data-pib") || "").trim();
+    }
+
+    function rowPassed(row) {
+      return (row.getAttribute("data-passed") || "").split(",").map(function (x) {
+        return x.trim();
+      }).filter(Boolean);
+    }
+
+    function queueCopyText() {
+      const due = vlkDate();
+      const lines = ["Подача на чергу ВЛК" + (due ? " " + due : "")];
+      list.querySelectorAll(".mh-vlk-row").forEach(function (row) {
+        const pib = rowPib(row);
+        if (pib) lines.push(pib);
+      });
+      return lines.length > 1 ? lines.join("\n") : "";
+    }
+
+    function statusCopyText() {
+      const due = vlkDate();
+      const lines = [due ? "ВЛК на " + due : "ВЛК"];
+      const labels = {};
+      (doctors || []).forEach(function (d) { labels[d.id] = d.label; });
+      const order = (doctors || []).map(function (d) { return d.id; });
+      list.querySelectorAll(".mh-vlk-row").forEach(function (row) {
+        const pib = rowPib(row);
+        if (!pib) return;
+        const passed = {};
+        rowPassed(row).forEach(function (id) { passed[id] = true; });
+        const done = [];
+        const left = [];
+        order.forEach(function (id) {
+          if (passed[id]) done.push(labels[id]);
+          else left.push(labels[id]);
+        });
+        if (!done.length) lines.push(pib + " - вперше");
+        else if (!left.length) lines.push(pib + " пройшов усе");
+        else lines.push(pib + " пройшов " + done.join(", ") + ", залишились " + left.join(", "));
+      });
+      return lines.length > 1 ? lines.join("\n") : "";
+    }
+
+    function esc(s) {
+      return String(s || "").replace(/[&<>"']/g, function (ch) {
+        return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
+      });
+    }
+
+    function emptyRow() {
+      const el = document.createElement("div");
+      el.className = "text-muted small mh-vlk-empty";
+      el.id = "vlk-queue-empty";
+      el.textContent = "Немає активних звернень типу ВЛК. Додайте звернення в журналі.";
+      return el;
+    }
+
+    function makeRow(item) {
+      const li = document.createElement("article");
+      li.className = "mh-vlk-tile mh-vlk-row";
+      li.draggable = true;
+      li.dataset.id = String(item.id || "");
+      li.setAttribute("data-pib", item.pib || "");
+      li.setAttribute("data-passed", (item.passed || []).join(","));
+      const pib = item.pib || "";
+      const note = item.note || "";
+      const pid = item.patient_id || 0;
+      const cardHref = pid ? ("/patient-cards/" + pid) : (cardsBase + (pib ? "?q=" + encodeURIComponent(pib) : ""));
+      const editHref = editBase + (item.id ? ("?edit=" + item.id) : "");
+      li.innerHTML =
+        '<div class="mh-vlk-tile-grip" aria-hidden="true">⋮⋮</div>' +
+        '<div class="mh-vlk-tile-main">' +
+        '<div class="mh-vlk-pib">' + esc(pib) + "</div>" +
+        (note ? '<div class="mh-vlk-note">' + esc(note) + "</div>" : "") +
+        "</div>" +
+        '<div class="mh-vlk-tile-actions">' +
+        '<a class="btn btn-sm btn-outline-primary" href="' + editHref + '">Звернення</a>' +
+        '<a class="btn btn-sm btn-outline-secondary" href="' + cardHref + '">Картка</a>' +
+        "</div>";
+      if (note) li.title = note;
+      return li;
+    }
+
+    function replaceItems(items) {
+      list.querySelectorAll(".mh-vlk-row, #vlk-queue-empty").forEach(function (el) { el.remove(); });
+      (items || []).forEach(function (item) { list.appendChild(makeRow(item)); });
+      if (!list.querySelector(".mh-vlk-row")) list.appendChild(emptyRow());
+    }
+
+    function dropIndex(x, y) {
+      const tiles = Array.from(list.querySelectorAll(".mh-vlk-tile:not(.is-dragging)"));
+      if (!tiles.length) return 0;
+      let best = tiles.length;
+      let bestD = Infinity;
+      tiles.forEach(function (el, i) {
+        const r = el.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+        if (d < bestD) {
+          bestD = d;
+          best = (x < cx || (Math.abs(x - cx) < 12 && y < cy)) ? i : i + 1;
+        }
+      });
+      return best;
+    }
+
+    function saveOrder() {
+      const ids = Array.from(list.querySelectorAll(".mh-vlk-tile")).map(function (el) {
+        return parseInt(el.dataset.id || "0", 10);
+      }).filter(Boolean);
+      fetch("{{ url_for('api_vlk_queue_reorder') }}", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ ids: ids }),
+      }).catch(function () {});
+    }
+
+    let dragged = null;
+    list.addEventListener("dragstart", function (ev) {
+      const tile = ev.target.closest(".mh-vlk-tile");
+      if (!tile || ev.target.closest("a, button")) return;
+      dragged = tile;
+      tile.classList.add("is-dragging");
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", tile.dataset.id || "");
+    });
+    list.addEventListener("dragend", function () {
+      if (dragged) dragged.classList.remove("is-dragging");
+      dragged = null;
+      list.classList.remove("is-over");
+    });
+    list.addEventListener("dragover", function (ev) {
+      if (!dragged) return;
+      ev.preventDefault();
+      list.classList.add("is-over");
+      const idx = dropIndex(ev.clientX, ev.clientY);
+      const tiles = list.querySelectorAll(".mh-vlk-tile:not(.is-dragging)");
+      const empty = list.querySelector("#vlk-queue-empty");
+      if (empty) empty.remove();
+      if (idx >= tiles.length) list.appendChild(dragged);
+      else list.insertBefore(dragged, tiles[idx]);
+    });
+    list.addEventListener("drop", function (ev) {
+      if (!dragged) return;
+      ev.preventDefault();
+      list.classList.remove("is-over");
+      saveOrder();
+    });
+
+    const importBtn = document.getElementById("vlk-import-btn");
+    if (importBtn) {
+      importBtn.addEventListener("click", function () {
+        fetch("{{ url_for('api_vlk_queue_import_journal') }}", {
+          method: "POST",
+          headers: jsonHeaders(),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data.ok) {
+              showAlert(data.error || "Не вдалося підтягнути", "danger");
+              return;
+            }
+            replaceItems(data.items || []);
+            const n = (data.items || []).length;
+            showAlert(n ? ("Підтягнуто з журналу: " + n) : "Активних звернень ВЛК у журналі немає", "success");
+          });
+      });
+    }
+
+    const copyQueueBtn = document.getElementById("vlk-copy-queue-btn");
+    if (copyQueueBtn) {
+      copyQueueBtn.addEventListener("click", function () { copyText(queueCopyText()); });
+    }
+    const copyStatusBtn = document.getElementById("vlk-copy-status-btn");
+    if (copyStatusBtn) {
+      copyStatusBtn.addEventListener("click", function () { copyText(statusCopyText()); });
+    }
+  })();
+
 </script>
 {% endblock %}

@@ -1,0 +1,69 @@
+{# Таблиця журналу: рендериться і зі сторінкою, і окремо для AJAX-фільтра. #}
+{% if records %}
+<div class="table-responsive mh-journal-wrap">
+  <table class="table table-hover mb-0 mh-journal-table">
+    <thead>
+      <tr>
+        <th class="mh-col-num">№</th>
+        <th class="mh-col-date">Дата</th>
+        <th class="mh-col-pib">ПІБ</th>
+        <th class="mh-col-diag">Діагноз</th>
+        <th class="mh-col-lpz">ЛПЗ</th>
+        <th class="mh-col-type">Тип</th>
+        <th class="mh-col-period">з</th>
+        <th class="mh-col-period">по</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr>
+        <td class="mh-col-num">{{ r.id }}</td>
+        <td class="mh-col-date">{{ r.date }}</td>
+        <td class="mh-col-pib">
+          {% if r.patient_id %}
+          <a href="{{ url_for('patient_card_detail', patient_id=r.patient_id) }}">{{ r.pib }}</a>
+          {% else %}
+          {{ r.pib }}
+          {% endif %}
+        </td>
+        <td class="mh-col-diag mh-cell-clamp">
+          {% if r.diagnosis %}
+          <div class="mh-clamp" data-mh-clamp>
+            <div class="mh-clamp-text">{{ r.diagnosis }}</div>
+            <button type="button" class="btn btn-link btn-sm p-0 mh-clamp-toggle d-none" aria-expanded="false">Показати більше</button>
+          </div>
+          {% else %}<span class="text-muted">—</span>{% endif %}
+        </td>
+        <td class="mh-col-lpz">{{ r.lpz or '—' }}</td>
+        <td class="mh-col-type">
+          {% if r.care_type_label %}
+          <span class="mh-type-badge">{{ r.care_type_label }}</span>
+          {% if r.wa_event_label %}<span class="mh-type-event">{{ r.wa_event_label }}</span>{% endif %}
+          {% else %}<span class="text-muted">—</span>{% endif %}
+        </td>
+        <td class="mh-col-period">
+          {% if r.care_type == 'consultation' %}
+            {{ r.date or '—' }}
+          {% elif r.care_type == 'referral' %}
+            {{ r.leave_start or r.date or '—' }}
+          {% else %}
+            {{ r.leave_start or '—' }}
+          {% endif %}
+        </td>
+        <td class="mh-col-period">
+          {% if r.care_type in ('consultation', 'referral') %}
+            —
+          {% else %}
+            {{ r.leave_end or '—' }}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif journal_count == 0 %}
+<p class="text-muted p-3 mb-0">Поки немає записів. Натисніть «Звернення», щоб додати перший.</p>
+{% else %}
+<p class="text-muted p-3 mb-0">Нічого не знайдено.</p>
+{% endif %}

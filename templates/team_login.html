@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Вхід — Медичний пункт батальйону{% endblock %}
+{% block content %}
+<div class="mh-shell py-4">
+  <div class="row">
+    <div class="col-xl-8 col-xxl-6">
+      <div class="page-header text-center mb-4">
+        <h1><i class="fas fa-shield-halved me-2"></i>Режим роботи</h1>
+        <p class="text-muted mb-0">
+          Оберіть раз — наступні запуски запам’ятають вибір на цьому ПК.
+        </p>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      {% for category, message in messages %}
+      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% endwith %}
+
+      <div id="team-login-alert" class="alert d-none" role="alert"></div>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <div class="card h-100">
+            <div class="card-body d-flex flex-column">
+              <h2 class="h5"><i class="fas fa-laptop me-2"></i>Локально</h2>
+              <p class="text-muted flex-grow-1">
+                Медичні / службові характеристики на цьому комп’ютері.
+                Без спільного журналу і без хмарних ключів.
+              </p>
+              <form method="POST" action="{{ url_for('team_unlock') }}" class="team-mode-form" data-no-loader>
+                <input type="hidden" name="action" value="local" />
+                <button type="submit" class="btn btn-outline-secondary w-100">
+                  Працювати локально
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-md-6">
+          <div class="card h-100 border-primary">
+            <div class="card-body d-flex flex-column">
+              <h2 class="h5 text-primary"><i class="fas fa-users me-2"></i>Команда</h2>
+              <p class="text-muted">
+                Спільний амбулаторний журнал (Turso), Excel у Dropbox,
+                Gemini і Dropbox API — з одного PIN.
+              </p>
+              {% if not has_vault %}
+              <div class="alert alert-warning py-2 small">
+                У цій збірці немає <code>team.vault</code>. Адміністратор має
+                зібрати пакет командою <code>build_team_vault.py</code>.
+              </div>
+              {% endif %}
+              {% if dropbox_found %}
+              <p class="small text-success mb-2">
+                <i class="fas fa-check me-1"></i>Dropbox знайдено:
+                <span class="user-select-all">{{ dropbox_root }}</span>
+              </p>
+              {% else %}
+              <p class="small text-warning mb-2">
+                <i class="fas fa-triangle-exclamation me-1"></i>
+                Клієнт Dropbox не знайдено. Для Excel спочатку встановіть Dropbox
+                і дочекайтесь синхронізації папки команди.
+              </p>
+              {% endif %}
+              <form method="POST" action="{{ url_for('team_unlock') }}" class="team-mode-form mt-auto" data-no-loader>
+                <input type="hidden" name="action" value="team" />
+                <label class="form-label small mb-1" for="team-pin">PIN команди</label>
+                <input
+                  type="password"
+                  class="form-control mb-2"
+                  id="team-pin"
+                  name="pin"
+                  autocomplete="current-password"
+                  inputmode="numeric"
+                  minlength="4"
+                  placeholder="••••"
+                  {% if not has_vault %}disabled{% endif %}
+                />
+                <button type="submit" class="btn btn-primary w-100" {% if not has_vault %}disabled{% endif %}>
+                  Увійти в команду
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {% if current_mode and change_mode %}
+      <p class="text-center text-muted small mt-4 mb-0">
+        Зараз активний режим:
+        <strong>{{ 'команда' if current_mode == 'team' else 'локально' }}</strong>.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function () {
+    const alertBox = document.getElementById("team-login-alert");
+    // Не form.action: у формі є поле name="action", і воно перекриває властивість.
+    const unlockUrl = "{{ url_for('team_unlock') }}";
+
+    function showAlert(ok, text) {
+      if (!alertBox) return;
+      alertBox.className = "alert alert-" + (ok ? "success" : "danger");
+      alertBox.textContent = text;
+      alertBox.classList.remove("d-none");
+    }
+
+    document.querySelectorAll(".team-mode-form").forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        const btn = form.querySelector('button[type="submit"]');
+        if (btn) btn.disabled = true;
+        if (typeof showLoading === "function") showLoading("Підключення…");
+        fetch(unlockUrl, {
+          method: "POST",
+          body: new FormData(form),
+          headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            Accept: "application/json",
+          },
+        })
+          .then(function (r) {
+            return r.text().then(function (text) {
+              let data = null;
+              try {
+                data = JSON.parse(text);
+              } catch (e) {
+                data = null;
+              }
+              return { okHttp: r.ok, status: r.status, data: data };
+            });
+          })
+          .then(function (res) {
+            if (typeof hideLoading === "function") hideLoading();
+            if (!res.data) {
+              if (btn) btn.disabled = false;
+              showAlert(
+                false,
+                "Сервер відповів помилкою (HTTP " + res.status + "). Деталі — у файлі логів Medhar."
+              );
+              return;
+            }
+            if (!res.okHttp || !res.data.ok) {
+              if (btn) btn.disabled = false;
+              showAlert(false, (res.data && res.data.error) || "Помилка входу");
+              return;
+            }
+            showAlert(true, res.data.message || "Готово");
+            window.location.href = res.data.redirect || "{{ url_for('index') }}";
+          })
+          .catch(function () {
+            if (typeof hideLoading === "function") hideLoading();
+            if (btn) btn.disabled = false;
+            showAlert(false, "Немає зв’язку з локальним сервером Medhar");
+          });
+      });
+    });
+  })();
+</script>
+{% endblock %}

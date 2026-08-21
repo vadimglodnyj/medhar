@@ -1,0 +1,35 @@
+{# Таблиця картотеки: для повної сторінки і для AJAX-пошуку. #}
+{% if patients %}
+<div class="table-responsive">
+  <table class="table table-hover mb-0 align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>ПІБ</th>
+        <th>Підрозділ</th>
+        <th>Телефон</th>
+        <th>Лікувань</th>
+        <th>Активних</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in patients %}
+      <tr>
+        <td>{{ p.pib }}</td>
+        <td class="small">{{ p.unit_short or p.rank_unit or '—' }}</td>
+        <td class="small">{{ p.phone or '—' }}</td>
+        <td>{{ p.treatments_count }}</td>
+        <td>{{ p.active_count }}</td>
+        <td class="text-end">
+          <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patient_card_detail', patient_id=p.id) }}">Картка</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif pib_query %}
+<p class="text-muted p-3 mb-0">Нічого не знайдено.</p>
+{% else %}
+<p class="text-muted p-3 mb-0">Поки немає пацієнтів у картотеці. Вони з’являться після звернень з прив’язкою до лікування.</p>
+{% endif %}

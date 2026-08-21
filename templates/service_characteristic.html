@@ -1,199 +1,206 @@
 {% extends "base.html" %}
 {% block title %}Службова характеристика - Медичний пункт батальйону{% endblock %}
 {% block content %}
-<div class="container">
-  <div class="row justify-content-center">
-    <div class="col-lg-8">
-      <div class="page-header text-center">
-        <h1><i class="fas fa-file-signature me-2"></i>Службова характеристика</h1>
-        <p class="lead">Генерація службової характеристики військовослужбовця</p>
-      </div>
-
-      {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-      {% for category, message in messages %}
-      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
-        {{ message }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-      </div>
-      {% endfor %}
-      {% endif %}
-      {% endwith %}
-
-      <div class="card">
-        <div class="card-header">
-          <h5 class="mh-section-title mb-0"><i class="fas fa-edit"></i>Заповніть дані для генерації</h5>
-        </div>
-        <div class="card-body">
-          <form id="generation-form" method="POST">
-            <div class="mb-3">
-              <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>Прізвище Ім'я по-батькові</label>
-              <select id="pib_nazivnyi" name="pib_nazivnyi" required placeholder="Почніть вводити ПІБ для пошуку..."></select>
-              <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
-            </div>
-
-            <input type="hidden" id="zvanie" name="zvanie" />
-            <input type="hidden" id="zaimana_posada" name="zaimana_posada" />
-            <input type="hidden" id="prizvyshche" name="prizvyshche" />
-            <input type="hidden" id="imya" name="imya" />
-            <input type="hidden" id="po_batkovi" name="po_batkovi" />
-
-            <h6 class="mb-3">Яким військовим комісаріатом і коли призваний</h6>
-            <div class="row">
-              <div class="col-md-8 mb-3">
-                <label for="komisariat" class="form-label">Військовий комісаріат</label>
-                <input
-                  type="text"
-                  id="komisariat"
-                  name="komisariat"
-                  class="form-control"
-                  placeholder="Напр.: Гуляйпільським РТЦК та СП Запорізької обл."
-                  required
-                />
-              </div>
-              <div class="col-md-4 mb-3">
-                <label for="data_pryzovu" class="form-label">Дата призову</label>
-                <input
-                  type="text"
-                  id="data_pryzovu"
-                  name="data_pryzovu"
-                  class="form-control"
-                  placeholder="дд.мм.рррр"
-                  pattern="\d{2}\.\d{2}\.\d{4}"
-                  title="Введіть дату у форматі дд.мм.рррр"
-                  required
-                />
-              </div>
-            </div>
-
-            <h6 class="mb-3">Освіта</h6>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label for="osvita_type" class="form-label">Вид освіти</label>
-                <select id="osvita_type" name="osvita_type" class="form-select" required>
-                  <option value="">Оберіть вид освіти</option>
-                  <option value="середня">середня</option>
-                  <option value="середньо-спеціальна">середньо-спеціальна</option>
-                  <option value="середньо-технічна">середньо-технічна</option>
-                  <option value="професійно-технічна">професійно-технічна</option>
-                  <option value="неповна вища">неповна вища</option>
-                  <option value="базова вища">базова вища</option>
-                  <option value="вища">вища</option>
-                </select>
-              </div>
-              <div class="col-md-6 mb-3">
-                <label for="navchalnyy_zaklad" class="form-label">Навчальний заклад</label>
-                <input
-                  type="text"
-                  id="navchalnyy_zaklad"
-                  name="navchalnyy_zaklad"
-                  class="form-control"
-                  placeholder="Напр.: ЗОШ №276"
-                  required
-                />
-              </div>
-            </div>
-            <div class="row">
-              <div class="col-md-8 mb-3">
-                <label for="misto_navchalnogo_zakladu" class="form-label">Місто навчального закладу</label>
-                <input
-                  type="text"
-                  id="misto_navchalnogo_zakladu"
-                  name="misto_navchalnogo_zakladu"
-                  class="form-control"
-                  placeholder="Напр.: Баку"
-                  required
-                />
-              </div>
-              <div class="col-md-4 mb-3">
-                <label for="rik_zakinchennya" class="form-label">Рік закінчення</label>
-                <input
-                  type="number"
-                  id="rik_zakinchennya"
-                  name="rik_zakinchennya"
-                  class="form-control"
-                  placeholder="1996"
-                  min="1950"
-                  max="2100"
-                  required
-                />
-              </div>
-            </div>
-
-            <hr />
-            <h6 class="mb-3">Підписанти</h6>
-            <div class="mb-3">
-              <label for="tvo_kombrig_select" class="form-label">ТВО командира частини</label>
-              <select id="tvo_kombrig_select" class="form-select" required>
-                <option value="">Оберіть підписанта</option>
-                {% for opt in signatory_defaults.kombrig_options %}
-                <option
-                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
-                  {% if opt.zvannya == signatory_defaults.pidpysant_1_zvannya and opt.pib == signatory_defaults.pidpysant_1_pib %}selected{% endif %}
-                >{{ opt.zvannya }} {{ opt.pib }}</option>
-                {% endfor %}
-              </select>
-              <input type="hidden" id="pidpysant_1_zvannya" name="pidpysant_1_zvannya" value="{{ signatory_defaults.pidpysant_1_zvannya }}" required />
-              <input type="hidden" id="pidpysant_1_pib" name="pidpysant_1_pib" value="{{ signatory_defaults.pidpysant_1_pib }}" required />
-            </div>
-            <div class="mb-3">
-              <label for="tvo_kombat_select" class="form-label">ТВО командира батальйону</label>
-              <select id="tvo_kombat_select" class="form-select" required>
-                <option value="">Оберіть підписанта</option>
-                {% for opt in signatory_defaults.kombat_options %}
-                <option
-                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
-                  {% if opt.zvannya == signatory_defaults.pidpysant_2_zvannya and opt.pib == signatory_defaults.pidpysant_2_pib %}selected{% endif %}
-                >{{ opt.zvannya }} {{ opt.pib }}</option>
-                {% endfor %}
-              </select>
-              <input type="hidden" id="pidpysant_2_zvannya" name="pidpysant_2_zvannya" value="{{ signatory_defaults.pidpysant_2_zvannya }}" required />
-              <input type="hidden" id="pidpysant_2_pib" name="pidpysant_2_pib" value="{{ signatory_defaults.pidpysant_2_pib }}" required />
-            </div>
-
-            <div class="mb-3">
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#add-signatory-panel" aria-expanded="false">
-                <i class="fas fa-user-plus me-1"></i>Додати підписанта
-              </button>
-            </div>
-            <div class="collapse mb-3" id="add-signatory-panel">
-              <div class="border rounded p-3 bg-white">
-                <div class="row g-2">
-                  <div class="col-md-3">
-                    <label for="new_signatory_role" class="form-label">Роль</label>
-                    <select id="new_signatory_role" class="form-select">
-                      <option value="kombrig">ТВО командира частини</option>
-                      <option value="kombat">ТВО командира батальйону</option>
-                    </select>
-                  </div>
-                  <div class="col-md-3">
-                    <label for="new_signatory_zvannya" class="form-label">Звання</label>
-                    <input type="text" id="new_signatory_zvannya" class="form-control" placeholder="капітан" />
-                  </div>
-                  <div class="col-md-4">
-                    <label for="new_signatory_pib" class="form-label">ПІБ (називний)</label>
-                    <input type="text" id="new_signatory_pib" class="form-control" placeholder="Ім'я ПРІЗВИЩЕ" />
-                  </div>
-                  <div class="col-md-2 d-flex align-items-end">
-                    <button type="button" id="add-signatory-btn" class="btn btn-primary w-100">
-                      <i class="fas fa-plus me-1"></i>Додати
-                    </button>
-                  </div>
-                </div>
-                <div id="add-signatory-msg" class="small text-muted mt-2"></div>
-              </div>
-            </div>
-
-            <div class="d-grid">
-              <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
-                <i class="fas fa-file-signature me-2"></i>Створити службову характеристику
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+<div class="mh-shell mh-dossier">
+  <div class="mh-dossier-header">
+    <div class="page-header">
+      <h1><i class="fas fa-file-signature me-2"></i>Службова характеристика</h1>
+      <p class="lead">Генерація службової характеристики військовослужбовця</p>
     </div>
   </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+    {{ message }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <form id="generation-form" method="POST" class="mh-dossier-grid">
+    <aside class="mh-dossier-panel mh-dossier-panel--person">
+      <h2 class="mh-dossier-panel-title"><i class="fas fa-user"></i>Особа</h2>
+      <div class="mh-dossier-section">
+        <label for="pib_nazivnyi" class="form-label">Прізвище Ім'я по-батькові</label>
+        <select id="pib_nazivnyi" name="pib_nazivnyi" required placeholder="Почніть вводити ПІБ для пошуку..."></select>
+        <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
+      </div>
+      <input type="hidden" id="zvanie" name="zvanie" />
+      <input type="hidden" id="zaimana_posada" name="zaimana_posada" />
+      <input type="hidden" id="prizvyshche" name="prizvyshche" />
+      <input type="hidden" id="imya" name="imya" />
+      <input type="hidden" id="po_batkovi" name="po_batkovi" />
+    </aside>
+
+    <div class="mh-dossier-panel">
+      <h2 class="mh-dossier-panel-title"><i class="fas fa-file-signature"></i>Параметри документа</h2>
+
+      <div class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Призов</p>
+        <div class="row g-3">
+          <div class="col-md-8">
+            <label for="komisariat" class="form-label">Військовий комісаріат</label>
+            <input
+              type="text"
+              id="komisariat"
+              name="komisariat"
+              class="form-control"
+              placeholder="Почніть вводити ТЦК або область..."
+              required
+            />
+            <div class="form-text">
+              Оберіть зі списку — підставиться в орудному відмінку разом з регіоном.
+            </div>
+          </div>
+          <div class="col-md-4">
+            <label for="data_pryzovu" class="form-label">Дата призову</label>
+            <input
+              type="text"
+              id="data_pryzovu"
+              name="data_pryzovu"
+              class="form-control mh-date"
+              placeholder="дд.мм.рррр"
+              inputmode="numeric"
+              data-mh-date-max-year="now"
+              title="Введіть дату у форматі дд.мм.рррр"
+              required
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Освіта</p>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label for="osvita_type" class="form-label">Вид освіти</label>
+            <select id="osvita_type" name="osvita_type" class="form-select" data-mh-no-tom required>
+              <option value="">Оберіть вид освіти</option>
+              <option value="середня">середня</option>
+              <option value="середньо-спеціальна">середньо-спеціальна</option>
+              <option value="середньо-технічна">середньо-технічна</option>
+              <option value="професійно-технічна">професійно-технічна</option>
+              <option value="неповна вища">неповна вища</option>
+              <option value="базова вища">базова вища</option>
+              <option value="вища">вища</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label for="navchalnyy_zaklad" class="form-label">Навчальний заклад</label>
+            <input
+              type="text"
+              id="navchalnyy_zaklad"
+              name="navchalnyy_zaklad"
+              class="form-control"
+              data-mh-no-tom
+              placeholder="Напр.: ЗОШ №276"
+              required
+            />
+          </div>
+          <div class="col-md-8">
+            <label for="misto_navchalnogo_zakladu" class="form-label">Місто навчального закладу</label>
+            <input
+              type="text"
+              id="misto_navchalnogo_zakladu"
+              name="misto_navchalnogo_zakladu"
+              class="form-control"
+              data-mh-no-tom
+              placeholder="Напр.: Баку"
+              required
+            />
+          </div>
+          <div class="col-md-4">
+            <label for="rik_zakinchennya" class="form-label">Рік закінчення</label>
+            <input
+              type="number"
+              id="rik_zakinchennya"
+              name="rik_zakinchennya"
+              class="form-control"
+              data-mh-no-tom
+              placeholder="1996"
+              min="1950"
+              max="2100"
+              required
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Підписанти</p>
+        <div class="mb-3">
+          <label for="tvo_kombrig_select" class="form-label">ТВО командира частини</label>
+          <select id="tvo_kombrig_select" class="form-select" required>
+            <option value="">Оберіть підписанта</option>
+            {% for opt in signatory_defaults.kombrig_options %}
+            <option
+              value="{{ opt.zvannya }}|||{{ opt.pib }}"
+              {% if opt.zvannya == signatory_defaults.pidpysant_1_zvannya and opt.pib == signatory_defaults.pidpysant_1_pib %}selected{% endif %}
+            >{{ opt.zvannya }} {{ opt.pib }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" id="pidpysant_1_zvannya" name="pidpysant_1_zvannya" value="{{ signatory_defaults.pidpysant_1_zvannya }}" required />
+          <input type="hidden" id="pidpysant_1_pib" name="pidpysant_1_pib" value="{{ signatory_defaults.pidpysant_1_pib }}" required />
+        </div>
+        <div class="mb-3">
+          <label for="tvo_kombat_select" class="form-label">ТВО командира батальйону</label>
+          <select id="tvo_kombat_select" class="form-select" required>
+            <option value="">Оберіть підписанта</option>
+            {% for opt in signatory_defaults.kombat_options %}
+            <option
+              value="{{ opt.zvannya }}|||{{ opt.pib }}"
+              {% if opt.zvannya == signatory_defaults.pidpysant_2_zvannya and opt.pib == signatory_defaults.pidpysant_2_pib %}selected{% endif %}
+            >{{ opt.zvannya }} {{ opt.pib }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" id="pidpysant_2_zvannya" name="pidpysant_2_zvannya" value="{{ signatory_defaults.pidpysant_2_zvannya }}" required />
+          <input type="hidden" id="pidpysant_2_pib" name="pidpysant_2_pib" value="{{ signatory_defaults.pidpysant_2_pib }}" required />
+        </div>
+
+        <div class="mb-3">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#add-signatory-panel" aria-expanded="false">
+            <i class="fas fa-user-plus me-1"></i>Додати підписанта
+          </button>
+        </div>
+        <div class="collapse mb-0" id="add-signatory-panel">
+          <div class="border rounded p-3 mh-inset-panel">
+            <div class="row g-2">
+              <div class="col-md-3">
+                <label for="new_signatory_role" class="form-label">Роль</label>
+                <select id="new_signatory_role" class="form-select" data-mh-no-tom>
+                  <option value="kombrig">ТВО командира частини</option>
+                  <option value="kombat">ТВО командира батальйону</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label for="new_signatory_zvannya" class="form-label">Звання</label>
+                <input type="text" id="new_signatory_zvannya" class="form-control" data-mh-no-tom placeholder="капітан" />
+              </div>
+              <div class="col-md-4">
+                <label for="new_signatory_pib" class="form-label">ПІБ (називний)</label>
+                <input type="text" id="new_signatory_pib" class="form-control" data-mh-no-tom placeholder="Ім'я ПРІЗВИЩЕ" />
+              </div>
+              <div class="col-md-2 d-flex align-items-end">
+                <button type="button" id="add-signatory-btn" class="btn btn-primary w-100">
+                  <i class="fas fa-plus me-1"></i>Додати
+                </button>
+              </div>
+            </div>
+            <div id="add-signatory-msg" class="small text-muted mt-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-actions">
+        <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
+          <i class="fas fa-file-signature me-2"></i>Створити службову характеристику
+        </button>
+      </div>
+    </div>
+  </form>
 </div>
 {% endblock %}
 
@@ -205,6 +212,7 @@
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/date_input.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
 <script>
   const form = document.getElementById("generation-form");
@@ -251,27 +259,6 @@
     document.getElementById("po_batkovi").value = "";
     hidePibInfoAlert();
   }
-
-  function validateDate(dateString) {
-    const pattern = /^(\d{2})\.(\d{2})\.(\d{4})$/;
-    const match = dateString.match(pattern);
-    if (!match) return false;
-    const day = parseInt(match[1], 10);
-    const month = parseInt(match[2], 10);
-    const year = parseInt(match[3], 10);
-    if (month < 1 || month > 12 || day < 1 || day > 31) return false;
-    const date = new Date(year, month - 1, day);
-    return date.getDate() === day && date.getMonth() === month - 1 && date.getFullYear() === year;
-  }
-
-  document.getElementById("data_pryzovu").addEventListener("blur", function () {
-    const v = String(getTomValue(this) || this.value || "").trim();
-    if (!v || !validateDate(v)) {
-      this.setCustomValidity("Вкажіть дату у форматі дд.мм.рррр");
-    } else {
-      this.setCustomValidity("");
-    }
-  });
 
   document.getElementById("rik_zakinchennya").addEventListener("blur", function () {
     const v = String(getTomValue(this) || this.value || "").trim();
@@ -406,9 +393,92 @@
     }
   }
 
+  function initKomisariatAutocomplete() {
+    const el = document.getElementById("komisariat");
+    if (!el || typeof TomSelect === "undefined" || el.tomselect) {
+      return Promise.resolve(null);
+    }
+
+    const initial = (el.value || "").trim();
+
+    return fetch("/api/tcc_options")
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .catch(function () { return []; })
+      .then(function (list) {
+        const seen = {};
+        const optionsList = [];
+        function add(item) {
+          const value = String((item && item.value) || "").trim();
+          if (!value) return;
+          const key = value.toLowerCase();
+          if (seen[key]) return;
+          seen[key] = true;
+          optionsList.push({
+            value: value,
+            label: value,
+            // name — назва в називному ("Голосіївський РТЦК та СП"): саме її
+            // вводить користувач, тоді як value/label уже в орудному.
+            name: (item && item.name) || value,
+            region: (item && item.region) || "",
+          });
+        }
+        if (initial) add({ value: initial });
+        (list || []).forEach(add);
+
+        const ts = new TomSelect(el, {
+          options: optionsList,
+          items: initial ? [initial] : [],
+          valueField: "value",
+          labelField: "label",
+          searchField: ["name", "label", "region"],
+          maxItems: 1,
+          maxOptions: 500,
+          persist: true,
+          preload: false,
+          openOnFocus: true,
+          placeholder: el.getAttribute("placeholder") || "",
+          plugins: ["clear_button"],
+          create: function (input) {
+            const v = (input || "").trim();
+            return v ? { value: v, label: v, region: "" } : false;
+          },
+          createOnBlur: true,
+          render: {
+            option: function (data, escape) {
+              const region = data.region
+                ? '<div class="small text-muted">' + escape(data.region) + "</div>"
+                : "";
+              return (
+                "<div>" +
+                escape(data.name || data.label || data.value || "") +
+                region +
+                "</div>"
+              );
+            },
+            item: function (data, escape) {
+              return "<div>" + escape(data.value || data.label || "") + "</div>";
+            },
+            option_create: function (data, escape) {
+              return (
+                '<div class="create">Використати «' + escape(data.input) + "»</div>"
+              );
+            },
+            no_results: function () {
+              return '<div class="no-results">Нічого не знайдено</div>';
+            },
+          },
+        });
+        return ts;
+      });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    initDateInputs("#generation-form");
+    initKomisariatAutocomplete();
     initFormTomSelects("#generation-form", {
       skipIds: [
+        "komisariat",
+        "data_pryzovu",
         "pib_nazivnyi",
         "zvanie",
         "zaimana_posada",
@@ -419,6 +489,13 @@
         "pidpysant_1_pib",
         "pidpysant_2_zvannya",
         "pidpysant_2_pib",
+        "osvita_type",
+        "navchalnyy_zaklad",
+        "misto_navchalnogo_zakladu",
+        "rik_zakinchennya",
+        "new_signatory_role",
+        "new_signatory_zvannya",
+        "new_signatory_pib",
       ],
       searchableIds: ["tvo_kombrig_select", "tvo_kombat_select"],
       clearButtonIds: ["tvo_kombrig_select", "tvo_kombat_select"],

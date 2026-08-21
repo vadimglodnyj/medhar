@@ -16,7 +16,6 @@ import pandas as pd
 
 from config import (
     COMBAT_DIAGNOSIS_PATTERNS_FILE,
-    DATA_DIR,
     PAYMENTS_COMBAT_COLUMN_FALLBACK,
     PAYMENTS_DIR,
     PAYMENTS_FILE_RE,
@@ -24,8 +23,15 @@ from config import (
     PAYMENTS_PREV_MONTH_CARRY_DAY,
     PAYMENTS_UNIT_FILTER,
 )
+import config as _cfg
 
 logger = logging.getLogger(__name__)
+
+JOURNAL_PAYABLE_CARE = {
+    "inpatient": "stat",
+    "rehab": "rehab",
+    "vacation": "leave",
+}
 
 PAYABLE_TYPES = {
     "стаціонар": "stat",
@@ -441,12 +447,17 @@ def _row_pib(row) -> str:
     return str(row.get("ПІБ") or "").strip()
 
 
+def payments_treatments_path(year: int) -> str:
+    """Той самий Excel, що на сторінці «Бази даних» (desktop: AppData / Dropbox)."""
+    return os.path.join(_cfg.EXCEL_DATA_DIR, f"treatments_{int(year)}.xlsx")
+
+
 def load_payments_treatments_df(year: int) -> pd.DataFrame:
     """
     База лікувань для відомості оплат — лише treatments_{year}.xlsx
     (як у ручній відомості, без злиття 2024/2025).
     """
-    path = os.path.join(DATA_DIR, f"treatments_{int(year)}.xlsx")
+    path = payments_treatments_path(year)
     if not os.path.isfile(path):
         return pd.DataFrame()
     df = pd.read_excel(path)
@@ -465,36 +476,26 @@ def load_payments_treatments_df(year: int) -> pd.DataFrame:
     return df
 
 
-def collect_treatment_candidates(
-    treatments_df: pd.DataFrame,
+def collect_journal_payment_candidates(
     *,
-    unit_filter: Optional[str] = None,
     default_end: Optional[date] = None,
 ) -> list[dict]:
     """
-    Рядки treatments з бойовим діагнозом і оплачуваним типом.
-    Без дати виписки: якщо задано default_end (кінець місяця відомості) —
-    епізод вважається відкритим до цієї дати (для актуальних рядків без виписки в Excel).
+    Епізоди з амбулаторного журналу: є поранення + стаціонар/реаб/відпустка.
+    Без здогадок по тексті діагнозу.
     """
-    if treatments_df is None or treatments_df.empty:
-        return []
+    from utils import patient_cards_db as cards_db
+
     hs = history_start()
     out: list[dict] = []
-    for _, row in treatments_df.iterrows():
-        unit = str(row.get("Підрозділ") or "").strip()
-        if not unit_matches_filter(unit, unit_filter):
-            continue
-        care = normalize_treatment_type(row.get("Вид лікування", ""))
+    for row in cards_db.list_payment_journal_episodes():
+        care = JOURNAL_PAYABLE_CARE.get(_normalize_care(row.get("care_type")))
         if not care:
             continue
-        prev = str(row.get("Попередній діагноз") or "")
-        final = str(row.get("Заключний діагноз") or "")
-        diag = (prev + "\n" + final).strip()
-        matched = resolve_combat_match(row, diag)
-        if not matched:
-            continue
-        start = parse_any_date(row.get("Дата надходження в поточний Л/З"))
-        end = parse_any_date(row.get("Дата виписки"))
+        start = parse_any_date(row.get("leave_start") or "") or parse_any_date(
+            row.get("visit_date") or ""
+        )
+        end = parse_any_date(row.get("leave_end") or "")
         missing_discharge = False
         if not start:
             continue
@@ -509,28 +510,41 @@ def collect_treatment_candidates(
         if not clipped:
             continue
         start, end = clipped
-        pib = _row_pib(row)
+        pib = (row.get("pib") or "").strip()
         if not pib:
             continue
-        injury = parse_any_date(row.get("Дата первинної госпіталізації"))
+        injury = parse_any_date(row.get("injury_date") or "")
+        injury_title = (row.get("injury_title") or "").strip() or "Поранення"
+        basis = injury_title
+        if injury:
+            basis = f"{injury_title} {injury.strftime('%d.%m.%Y')}"
+        unit = cards_db.format_wa_unit_line(
+            row.get("unit_short") or "",
+            canonical_unit=(row.get("rank_unit") or ""),
+        )
+        diag = re.sub(r"\s+", " ", str(row.get("diagnosis") or "")).strip()
         out.append(
             {
                 "pib": pib,
                 "pib_key": normalize_pib(pib),
                 "unit": unit,
-                "position": str(row.get("Посада") or "").strip(),
-                "rank": str(row.get("Військове звання") or "").strip(),
+                "position": str(row.get("position") or "").strip(),
+                "rank": str(row.get("rank") or "").strip(),
                 "injury_date": injury,
                 "care_type": care,
                 "start": start,
                 "end": end,
-                "pattern_label": matched["pattern_label"],
-                "diagnosis_snippet": matched["snippet"],
-                "diagnosis_full": re.sub(r"\s+", " ", diag).strip()[:500],
+                "pattern_label": basis,
+                "diagnosis_snippet": diag[:160],
+                "diagnosis_full": diag[:500],
                 "missing_discharge": missing_discharge,
             }
         )
     return out
+
+
+def _normalize_care(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
 
 def vedomost_display_parts(
@@ -589,23 +603,17 @@ def segment_for_vedomost_month(
 
 
 def find_unpaid_segments(
-    treatments_df: pd.DataFrame,
     *,
     year: int,
     month: int,
-    unit_filter: Optional[str] = None,
 ) -> list[UnpaidSegment]:
     """
-    Неоплачені залишки для відомості за місяць.
+    Неоплачені залишки з журналу для відомості за місяць.
     Дні рахуються лише в межах обраного місяця (або повністю для червневого «хвоста»).
     """
     paid_map = load_paid_intervals_by_pib()
     _, month_hi = month_bounds(year, month)
-    candidates = collect_treatment_candidates(
-        treatments_df,
-        unit_filter=unit_filter,
-        default_end=month_hi,
-    )
+    candidates = collect_journal_payment_candidates(default_end=month_hi)
     segments: list[UnpaidSegment] = []
     for c in candidates:
         paid_list = paid_map.get(c["pib_key"], {}).get(c["care_type"], [])

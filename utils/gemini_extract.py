@@ -8,7 +8,8 @@ import logging
 import re
 import time
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, TREATMENT_MEDIA_MAX_BYTES
+from config import TREATMENT_MEDIA_MAX_BYTES
+import config as _cfg
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ _PROMPT = """Ти медичний асистент медпункту бата�
 
 
 def gemini_configured() -> bool:
-    return bool(GEMINI_API_KEY)
+    return bool(_cfg.GEMINI_API_KEY)
 
 
 def _parse_json_payload(raw: str) -> dict:
@@ -65,8 +66,8 @@ def extract_diagnosis_from_parts(parts: list[tuple[bytes, str]]) -> dict:
     parts: список (bytes, mime_type).
     Повертає {diagnosis, recommendations}.
     """
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Не задано GEMINI_API_KEY у файлі .env")
+    if not _cfg.GEMINI_API_KEY:
+        raise RuntimeError("Не задано _cfg.GEMINI_API_KEY у файлі .env")
     if not parts:
         raise ValueError("Немає файлів для зчитування")
 
@@ -88,8 +89,8 @@ def extract_diagnosis_from_parts(parts: list[tuple[bytes, str]]) -> dict:
         contents.append(types.Part.from_bytes(data=blob, mime_type=mime_n))
     contents.append(_PROMPT)
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    preferred = (GEMINI_MODEL or "").strip()
+    client = genai.Client(api_key=_cfg.GEMINI_API_KEY)
+    preferred = (_cfg.GEMINI_MODEL or "").strip()
     candidates = []
     for name in (
         preferred,
@@ -153,7 +154,7 @@ def extract_diagnosis_from_parts(parts: list[tuple[bytes, str]]) -> dict:
     if response is None:
         raise RuntimeError(
             "Gemini тимчасово перевантажений. Спробуйте ще раз через хвилину "
-            f"або змініть GEMINI_MODEL у .env. ({last_error})"
+            f"або змініть _cfg.GEMINI_MODEL у .env. ({last_error})"
             if last_error
             else "Gemini не відповів"
         )

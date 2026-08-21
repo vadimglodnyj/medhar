@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ patient.pib }} - Картотека{% endblock %}
 {% block content %}
-<div class="container">
-  <div class="row justify-content-center">
-    <div class="col-lg-10">
+<div class="mh-shell">
       <div class="mb-3">
         <a href="{{ url_for('patient_cards') }}" class="btn btn-sm btn-outline-secondary">
           <i class="fas fa-arrow-left me-1"></i>До картотеки
@@ -28,6 +26,8 @@
       {% endif %}
       {% endwith %}
 
+      <div class="row g-4 align-items-start">
+      <div class="col-xl-8">
       <div class="card mb-4">
         <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
           <h5 class="mb-0 mh-section-title"><i class="fas fa-id-card"></i>Дані військовослужбовця</h5>
@@ -58,8 +58,8 @@
             <div class="row">
               <div class="col-md-4 mb-3">
                 <label class="form-label" for="birth_date">Дата народження</label>
-                <input type="text" class="form-control" id="birth_date" name="birth_date"
-                  value="{{ patient.birth_date or '' }}" placeholder="дд.мм.рррр" />
+                <input type="text" class="form-control mh-date" id="birth_date" name="birth_date"
+                  value="{{ patient.birth_date or '' }}" placeholder="дд.мм.рррр" inputmode="numeric" />
               </div>
               <div class="col-md-4 mb-3">
                 <label class="form-label" for="phone">Телефон</label>
@@ -84,8 +84,8 @@
               </div>
               <div class="col-md-4 mb-3">
                 <label class="form-label" for="enlistment_date">Дата призову на службу</label>
-                <input type="text" class="form-control" id="enlistment_date" name="enlistment_date"
-                  value="{{ patient.enlistment_date or '' }}" placeholder="дд.мм.рррр" />
+                <input type="text" class="form-control mh-date" id="enlistment_date" name="enlistment_date"
+                  value="{{ patient.enlistment_date or '' }}" placeholder="дд.мм.рррр" inputmode="numeric" />
               </div>
               <div class="col-md-4 mb-3">
                 <label class="form-label" for="komisariat">Яким військкоматом призваний</label>
@@ -106,11 +106,65 @@
       </div>
 
       <div class="card mb-4">
-        <div class="card-header">
-          <h5 class="mb-0 mh-section-title"><i class="fas fa-file-medical"></i>Фабула на ВЛК</h5>
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0 mh-section-title"><i class="fas fa-notes-medical"></i>Лікування</h5>
+          <a class="btn btn-sm btn-primary" href="{{ url_for('outpatient_journal', new=1, q=patient.pib) }}">
+            + Звернення
+          </a>
         </div>
+        <div class="list-group list-group-flush">
+          {% for t in treatments %}
+          <div class="list-group-item">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <a href="{{ url_for('patient_treatment_detail', treatment_id=t.id) }}"
+                 class="flex-grow-1 text-decoration-none text-body min-w-0">
+                <strong>{{ t.title }}</strong>
+                <span class="badge text-bg-{{ 'success' if t.status == 'active' else 'secondary' }} ms-1">{{ t.status_label }}</span>
+                {% if t.cause_label %}
+                <span class="badge text-bg-{{ 'danger' if t.cause == 'combat' else 'light' }} ms-1">{{ t.cause_label }}</span>
+                {% endif %}
+                <div class="small text-muted">
+                  з {{ t.started_on or '—' }}
+                  {% if t.closed_on %} · до {{ t.closed_on }}{% endif %}
+                  · {{ t.visits_count }} зверн.
+                  · {{ t.days_count }} дн. лікування
+                </div>
+              </a>
+              <form method="POST" class="flex-shrink-0"
+                    onsubmit="return confirm('Видалити це лікування? Звернення в журналі залишаться, але відв’яжуться від нього.');">
+                <input type="hidden" name="action" value="delete_treatment" />
+                <input type="hidden" name="treatment_id" value="{{ t.id }}" />
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Видалити лікування">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </form>
+            </div>
+          </div>
+          {% else %}
+          <div class="list-group-item text-muted">Ще немає лікувань. Додайте звернення з «+ Нове лікування».</div>
+          {% endfor %}
+        </div>
+      </div>
+      </div>
+      <div class="col-xl-4">
+
+      <div class="card mb-4" id="vlk-fabula-card">
+        <div class="card-header d-flex align-items-center justify-content-between gap-2">
+          <h5 class="mb-0 mh-section-title"><i class="fas fa-file-medical"></i>Фабула на ВЛК</h5>
+          <button type="button"
+            class="mh-collapse-btn collapsed"
+            data-bs-toggle="collapse"
+            data-bs-target="#vlk-fabula-body"
+            aria-expanded="false"
+            aria-controls="vlk-fabula-body"
+            id="vlk-fabula-toggle">
+            <span class="mh-collapse-label-expand">Розгорнути</span>
+            <span class="mh-collapse-label-collapse">Згорнути</span>
+          </button>
+        </div>
+        <div id="vlk-fabula-body" class="collapse">
         <div class="card-body">
-          <form method="POST" id="vlk-fabula-form">
+          <form method="POST" id="vlk-fabula-form" data-no-loader>
             <input type="hidden" name="action" value="vlk_fabula" />
             <div class="mb-3">
               <label class="form-label" for="vlk_place">1. Місце проходження ВЛК</label>
@@ -137,15 +191,15 @@
               </div>
               <div class="col-md-6 mb-3">
                 <label class="form-label" for="fabula_birth_date">5. Дата народження</label>
-                <input type="text" class="form-control" id="fabula_birth_date" name="birth_date"
-                  value="{{ patient.birth_date or '' }}" placeholder="дд.мм.рррр" />
+                <input type="text" class="form-control mh-date" id="fabula_birth_date" name="birth_date"
+                  value="{{ patient.birth_date or '' }}" placeholder="дд.мм.рррр" inputmode="numeric" />
               </div>
             </div>
             <div class="row">
               <div class="col-md-6 mb-3">
                 <label class="form-label" for="fabula_enlistment_date">6. Дата призову на службу</label>
-                <input type="text" class="form-control" id="fabula_enlistment_date" name="enlistment_date"
-                  value="{{ patient.enlistment_date or '' }}" placeholder="дд.мм.рррр" />
+                <input type="text" class="form-control mh-date" id="fabula_enlistment_date" name="enlistment_date"
+                  value="{{ patient.enlistment_date or '' }}" placeholder="дд.мм.рррр" inputmode="numeric" />
               </div>
               <div class="col-md-6 mb-3">
                 <label class="form-label" for="fabula_komisariat">7. Яким військкоматом призваний</label>
@@ -184,40 +238,113 @@
             </button>
           </form>
         </div>
+        </div>
       </div>
 
-      <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-          <h5 class="mb-0 mh-section-title"><i class="fas fa-notes-medical"></i>Лікування</h5>
-          <a class="btn btn-sm btn-primary" href="{{ url_for('outpatient_journal', new=1, q=patient.pib) }}">
-            + Звернення
-          </a>
+      <div class="card mb-4" id="injury-cases-card">
+        <div class="card-header d-flex align-items-center justify-content-between gap-2">
+          <h5 class="mb-0 mh-section-title"><i class="fas fa-file-medical"></i>Поранення</h5>
+          <button type="button"
+            class="mh-collapse-btn collapsed"
+            data-bs-toggle="collapse"
+            data-bs-target="#injury-cases-body"
+            aria-expanded="false"
+            aria-controls="injury-cases-body"
+            id="injury-cases-toggle">
+            <span class="mh-collapse-label-expand">Розгорнути</span>
+            <span class="mh-collapse-label-collapse">Згорнути</span>
+          </button>
         </div>
-        <div class="list-group list-group-flush">
-          {% for t in treatments %}
-          <a href="{{ url_for('patient_treatment_detail', treatment_id=t.id) }}"
-             class="list-group-item list-group-item-action">
-            <div class="d-flex justify-content-between align-items-start gap-2">
-              <div>
-                <strong>{{ t.title }}</strong>
-                <span class="badge text-bg-{{ 'success' if t.status == 'active' else 'secondary' }} ms-1">{{ t.status_label }}</span>
-                <div class="small text-muted">
-                  з {{ t.started_on or '—' }}
-                  {% if t.closed_on %} · до {{ t.closed_on }}{% endif %}
-                  · {{ t.visits_count }} зверн.
-                  · {{ t.days_count }} дн. лікування
-                </div>
+        <div id="injury-cases-body" class="collapse">
+        <div class="card-body">
+          <p class="small text-muted mb-3">
+            Одна дата поранення — одна довідка про обставини травми. Амбулаторне, стаціонар і відпустка
+            з цього приводу користуються тим самим PDF.
+          </p>
+          {% for c in injury_cases|default([]) %}
+          <div class="border rounded p-3 mb-3 {% if c.certs %}border-success{% elif c.skip_cert == '1' %}{% else %}border-danger{% endif %}">
+            <form method="POST" class="row g-2 align-items-end mb-2">
+              <input type="hidden" name="action" value="save_injury_case" />
+              <input type="hidden" name="injury_case_id" value="{{ c.id }}" />
+              <div class="col-md-3">
+                <label class="form-label small mb-1">Дата поранення</label>
+                <input type="text" class="form-control form-control-sm" name="injury_date"
+                       value="{{ c.injury_date or '' }}" placeholder="ДД.ММ.РРРР" />
               </div>
-              <i class="fas fa-chevron-right text-muted mt-1"></i>
+              <div class="col-md-6">
+                <label class="form-label small mb-1">Назва / діагноз</label>
+                <input type="text" class="form-control form-control-sm" name="injury_title"
+                       value="{{ c.title or '' }}" />
+              </div>
+              <div class="col-md-3">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Зберегти</button>
+              </div>
+            </form>
+            {% if c.treatments %}
+            <div class="small mb-2">
+              Лікування цього поранення:
+              {% for t in c.treatments %}
+              <a href="{{ url_for('patient_treatment_detail', treatment_id=t.id) }}">{{ t.title }}</a>{% if not loop.last %}, {% endif %}
+              {% endfor %}
             </div>
-          </a>
+            {% else %}
+            <div class="small text-muted mb-2">Ще немає прив’язаних лікувань.</div>
+            {% endif %}
+            {% if c.certs %}
+            <ul class="list-unstyled small mb-2">
+              {% for m in c.certs %}
+              <li>
+                <a href="{{ url_for('patient_media_file', media_id=m.id) }}" target="_blank" rel="noopener">
+                  <i class="fas fa-file-pdf me-1"></i>{{ m.original_name }}
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="small text-danger mb-2">PDF довідки ще немає.</p>
+            {% endif %}
+            <form method="POST" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 mb-2">
+              <input type="hidden" name="action" value="upload_injury_cert" />
+              <input type="hidden" name="injury_case_id" value="{{ c.id }}" />
+              <input type="file" class="form-control form-control-sm" style="max-width: 16rem"
+                     name="injury_cert_file" accept="application/pdf,.pdf" />
+              <button type="submit" class="btn btn-sm btn-primary">Завантажити PDF</button>
+            </form>
+            <form method="POST">
+              <input type="hidden" name="action" value="skip_injury_case" />
+              <input type="hidden" name="injury_case_id" value="{{ c.id }}" />
+              {% if c.skip_cert == '1' %}
+              <input type="hidden" name="skip" value="0" />
+              <button type="submit" class="btn btn-sm btn-outline-danger">Очікувати довідку</button>
+              {% else %}
+              <input type="hidden" name="skip" value="1" />
+              <button type="submit" class="btn btn-sm btn-outline-secondary">Не потрібна довідка</button>
+              {% endif %}
+            </form>
+          </div>
           {% else %}
-          <div class="list-group-item text-muted">Ще немає лікувань. Додайте звернення з «+ Нове лікування».</div>
+          <p class="small text-muted">Немає окремих поранень. Вони з’являться самі, якщо в назві лікування є бойова травма й дата, наприклад «ВТ (10.03.2026)».</p>
           {% endfor %}
+          <form method="POST" class="row g-2 align-items-end">
+            <input type="hidden" name="action" value="add_injury_case" />
+            <div class="col-md-3">
+              <label class="form-label small mb-1">Нове поранення</label>
+              <input type="text" class="form-control form-control-sm" name="injury_date"
+                     placeholder="10.03.2026" required />
+            </div>
+            <div class="col-md-6">
+              <input type="text" class="form-control form-control-sm" name="injury_title"
+                     placeholder="Назва (наприклад ВТ)" />
+            </div>
+            <div class="col-md-3">
+              <button type="submit" class="btn btn-sm btn-outline-primary">Додати</button>
+            </div>
+          </form>
+        </div>
         </div>
       </div>
-    </div>
-  </div>
+      </div>
+      </div>
 </div>
 {% endblock %}
 
@@ -229,9 +356,11 @@
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/date_input.js') }}"></script>
 <script src="{{ url_for('static', filename='js/lpz_tom_select.js') }}"></script>
 <script>
   document.addEventListener("DOMContentLoaded", function () {
+    initDateInputs(document);
     if (typeof initLpzTomSelect === "function") {
       initLpzTomSelect({
         selectId: "vlk_place",

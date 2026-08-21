@@ -1,6 +1,6 @@
 {% extends "base.html" %} {% block title %}Медична характеристика - Медичний пункт батальйону{%
 endblock %} {% block content %}
-<div class="container position-relative">
+<div class="mh-shell position-relative mh-dossier">
   <div
     id="treatments-preload-overlay"
     class="treatments-preload-overlay"
@@ -23,265 +23,270 @@ endblock %} {% block content %}
       </button>
     </div>
   </div>
-  <div class="row justify-content-center">
-    <div class="col-lg-8">
-      <div class="page-header text-center">
-        <h1><i class="fas fa-file-medical me-2"></i>Медична характеристика</h1>
-        <p class="lead">Генерація медичної характеристики військовослужбовця</p>
-      </div>
 
-      <!-- Відображення повідомлень -->
-      <div id="generation-feedback" class="d-none"></div>
-      {% with messages = get_flashed_messages(with_categories=true) %} {% if
-      messages %} {% for category, message in messages %}
-      <div
-        class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show"
-      >
-        {{ message }}
-        <button
-          type="button"
-          class="btn-close"
-          data-bs-dismiss="alert"
-        ></button>
-      </div>
-      {% endfor %} {% endif %} {% endwith %}
-
-      <!-- Форма генерації -->
-      <div class="card">
-        <div class="card-header">
-          <h5 class="mh-section-title mb-0">
-            <i class="fas fa-edit"></i>Заповніть дані для генерації
-          </h5>
-        </div>
-        <div class="card-body">
-          <form id="generation-form" method="POST">
-            <!-- ПІБ в називному відмінку -->
-            <div class="mb-3">
-              <label for="pib_nazivnyi" class="form-label">
-                <i class="fas fa-user me-1"></i>ПІБ (в називному відмінку)
-              </label>
-              <select
-                id="pib_nazivnyi"
-                name="pib_nazivnyi"
-                required
-                placeholder="Почніть вводити ПІБ для пошуку..."
-              ></select>
-              <div
-                id="pib-info-alert"
-                class="alert alert-success mt-2 mb-0 py-2 d-none"
-                role="status"
-              ></div>
-              <div class="mt-2">
-                <button
-                  type="button"
-                  id="toggle-pib-rodovyi"
-                  class="btn btn-link btn-sm px-0"
-                >
-                  Показати ПІБ (в родовому відмінку)
-                </button>
-              </div>
-              <div id="pib-rodovyi-wrap" class="d-none mt-2">
-                <label for="pib_rodovyi" class="form-label">
-                  <i class="fas fa-user-tag me-1"></i>ПІБ (в родовому відмінку)
-                </label>
-                <input
-                  type="text"
-                  id="pib_rodovyi"
-                  name="pib_rodovyi"
-                  class="form-control"
-                  placeholder="Заповниться автоматично з називного; можна виправити вручну"
-                />
-                <div class="form-text text-muted">
-                  <i class="fas fa-magic me-1"></i>
-                  Родовий відмінок підставляється автоматично. Якщо форма
-                  неточна — відредагуйте поле вручну перед генерацією.
-                </div>
-              </div>
-            </div>
-
-            <!-- Дата зарахування -->
-            <div class="mb-3">
-              <label for="enlistment_date" class="form-label">
-                <i class="fas fa-calendar-plus me-1"></i>Дата зарахування в
-                списки частини
-              </label>
-              <select
-                id="enlistment_date"
-                name="enlistment_date"
-                class="form-select"
-                required
-              >
-                <option value="">Оберіть варіант</option>
-                <option value="з моменту призову">З моменту призову</option>
-                <option value="custom">Вказати конкретну дату</option>
-              </select>
-              <input
-                type="text"
-                id="enlistment_date_custom"
-                name="enlistment_date_custom"
-                class="form-control mt-2"
-                placeholder="дд.мм.рррр"
-                pattern="\d{2}\.\d{2}\.\d{4}"
-                title="Введіть дату у форматі дд.мм.рррр"
-                style="display: none"
-              />
-            </div>
-
-            <!-- Під медичним наглядом -->
-            <div class="mb-3">
-              <label for="observation_end" class="form-label">
-                <i class="fas fa-stethoscope me-1"></i>Під медичним наглядом по
-              </label>
-              <select
-                id="observation_end"
-                name="observation_end"
-                class="form-select"
-                required
-              >
-                <option value="">Оберіть варіант</option>
-                <option value="по теперішній час">По теперішній час</option>
-                <option value="custom">Вказати конкретну дату</option>
-              </select>
-              <input
-                type="text"
-                id="observation_end_custom"
-                name="observation_end_custom"
-                class="form-control mt-2"
-                placeholder="дд.мм.рррр"
-                pattern="\d{2}\.\d{2}\.\d{4}"
-                title="Введіть дату у форматі дд.мм.рррр"
-                style="display: none"
-              />
-            </div>
-
-            <div id="manual-soldier-block">
-              <hr />
-
-              <!-- Додаткові поля -->
-              <div class="row">
-                <div class="col-md-6">
-                  <div class="mb-3">
-                    <label for="zvanie" class="form-label">
-                      <i class="fas fa-shield-alt me-1"></i>Військове звання
-                    </label>
-                    <select id="zvanie" name="zvanie" class="form-select">
-                      <option value="">Оберіть звання</option>
-                      <option value="солдат">солдат</option>
-                      <option value="старший солдат">старший солдат</option>
-                      <option value="молодший сержант">молодший сержант</option>
-                      <option value="сержант">сержант</option>
-                      <option value="старший сержант">старший сержант</option>
-                      <option value="головний сержант">головний сержант</option>
-                      <option value="штаб-сержант">штаб-сержант</option>
-                      <option value="майстер-сержант">майстер-сержант</option>
-                      <option value="старший майстер-сержант">
-                        старший майстер-сержант
-                      </option>
-                      <option value="головний майстер-сержант">
-                        головний майстер-сержант
-                      </option>
-                      <option value="молодший лейтенант">
-                        молодший лейтенант
-                      </option>
-                      <option value="лейтенант">лейтенант</option>
-                      <option value="старший лейтенант">старший лейтенант</option>
-                      <option value="капітан">капітан</option>
-                      <option value="майор">майор</option>
-                      <option value="підполковник">підполковник</option>
-                      <option value="полковник">полковник</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="col-md-6">
-                  <div class="mb-3">
-                    <label for="sluzhba_type" class="form-label">
-                      <i class="fas fa-clipboard-list me-1"></i>Вид служби
-                    </label>
-                    <select
-                      id="sluzhba_type"
-                      name="sluzhba_type"
-                      class="form-select"
-                    >
-                      <option value="під час мобілізації">
-                        під час мобілізації
-                      </option>
-                      <option value="за контрактом">за контрактом</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div class="mb-3">
-                <label for="birth_date" class="form-label">
-                  <i class="fas fa-birthday-cake me-1"></i>Дата народження
-                  (дд.мм.рррр)
-                </label>
-                <input
-                  type="text"
-                  id="birth_date"
-                  name="birth_date"
-                  class="form-control"
-                  placeholder="дд.мм.рррр"
-                  pattern="\d{2}\.\d{2}\.\d{4}"
-                  title="Введіть дату у форматі дд.мм.рррр"
-                />
-              </div>
-            </div>
-
-            <hr />
-            <div class="mb-3">
-              <label for="signatory" class="form-label">
-                <i class="fas fa-signature me-1"></i>Підписує характеристику
-              </label>
-              <select
-                id="signatory"
-                name="signatory"
-                class="form-select"
-                required
-              >
-                <option value="">Оберіть підписанта</option>
-                <option value="acting_chief">
-                  Т. в. о. начальника медичної служби секції тилу капітан м\с
-                  Ірина ГОНЧАРОВА
-                </option>
-                <option value="chief">
-                  Начальник медичної служби секції тилу майор м/с Юлія ЮРЧАК
-                </option>
-                <option value="company_commander">
-                  Командир медичної роти капітан м/с Євгеній МАЖАЄВ
-                </option>
-              </select>
-            </div>
-
-            <div class="mb-3 form-check">
-              <input
-                type="checkbox"
-                id="no_diagnosis"
-                name="no_diagnosis"
-                value="yes"
-                class="form-check-input"
-              />
-              <label for="no_diagnosis" class="form-check-label">
-                <i class="fas fa-exclamation-triangle me-1"></i>
-                Для службового розслідування (без діагнозів)
-              </label>
-            </div>
-
-            <div class="d-grid">
-              <button
-                id="submit-button"
-                type="submit"
-                class="btn btn-primary btn-lg"
-              >
-                <i class="fas fa-file-medical me-2"></i>
-                Створити медичну характеристику
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+  <div class="mh-dossier-header">
+    <div class="page-header">
+      <h1><i class="fas fa-file-medical me-2"></i>Медична характеристика</h1>
+      <p class="lead">Генерація медичної характеристики військовослужбовця</p>
     </div>
   </div>
+
+  <div id="generation-feedback" class="d-none"></div>
+  {% with messages = get_flashed_messages(with_categories=true) %} {% if
+  messages %} {% for category, message in messages %}
+  <div
+    class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show"
+  >
+    {{ message }}
+    <button
+      type="button"
+      class="btn-close"
+      data-bs-dismiss="alert"
+    ></button>
+  </div>
+  {% endfor %} {% endif %} {% endwith %}
+
+  <form id="generation-form" method="POST" class="mh-dossier-grid">
+    <aside class="mh-dossier-panel mh-dossier-panel--person">
+      <h2 class="mh-dossier-panel-title">
+        <i class="fas fa-user-injured"></i>Особа
+      </h2>
+
+      <div class="mh-dossier-section">
+        <label for="pib_nazivnyi" class="form-label">ПІБ (називний)</label>
+        <select
+          id="pib_nazivnyi"
+          name="pib_nazivnyi"
+          required
+          placeholder="Почніть вводити ПІБ для пошуку..."
+        ></select>
+        <div
+          id="pib-info-alert"
+          class="alert alert-success mt-2 mb-0 py-2 d-none"
+          role="status"
+        ></div>
+        <div class="mt-2">
+          <button
+            type="button"
+            id="toggle-pib-rodovyi"
+            class="btn btn-link btn-sm px-0"
+          >
+            Показати ПІБ (в родовому відмінку)
+          </button>
+        </div>
+        <div id="pib-rodovyi-wrap" class="d-none mt-2">
+          <label for="pib_rodovyi" class="form-label">ПІБ (родовий)</label>
+          <input
+            type="text"
+            id="pib_rodovyi"
+            name="pib_rodovyi"
+            class="form-control"
+            data-mh-no-tom
+            placeholder="Заповниться автоматично; можна виправити"
+          />
+        </div>
+      </div>
+
+      <div id="manual-soldier-block" class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Дані служби</p>
+        <div class="mb-3">
+          <label for="zvanie" class="form-label">Військове звання</label>
+          <select id="zvanie" name="zvanie" class="form-select" data-mh-no-tom>
+            <option value="">Оберіть звання</option>
+            <option value="солдат">солдат</option>
+            <option value="старший солдат">старший солдат</option>
+            <option value="молодший сержант">молодший сержант</option>
+            <option value="сержант">сержант</option>
+            <option value="старший сержант">старший сержант</option>
+            <option value="головний сержант">головний сержант</option>
+            <option value="штаб-сержант">штаб-сержант</option>
+            <option value="майстер-сержант">майстер-сержант</option>
+            <option value="старший майстер-сержант">старший майстер-сержант</option>
+            <option value="головний майстер-сержант">головний майстер-сержант</option>
+            <option value="молодший лейтенант">молодший лейтенант</option>
+            <option value="лейтенант">лейтенант</option>
+            <option value="старший лейтенант">старший лейтенант</option>
+            <option value="капітан">капітан</option>
+            <option value="майор">майор</option>
+            <option value="підполковник">підполковник</option>
+            <option value="полковник">полковник</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label for="sluzhba_type" class="form-label">Вид служби</label>
+          <select
+            id="sluzhba_type"
+            name="sluzhba_type"
+            class="form-select"
+            data-mh-no-tom
+          >
+            <option value="під час мобілізації">під час мобілізації</option>
+            <option value="за контрактом">за контрактом</option>
+          </select>
+        </div>
+        <div class="mb-0">
+          <label for="birth_date" class="form-label">Дата народження</label>
+          <input
+            type="text"
+            id="birth_date"
+            name="birth_date"
+            class="form-control mh-date"
+            data-mh-date-max-year="now"
+            placeholder="дд.мм.рррр"
+            inputmode="numeric"
+            title="Введіть дату у форматі дд.мм.рррр"
+          />
+        </div>
+      </div>
+    </aside>
+
+    <div class="mh-dossier-panel">
+      <h2 class="mh-dossier-panel-title">
+        <i class="fas fa-file-medical"></i>Параметри документа
+      </h2>
+
+      <div class="mh-dossier-section">
+        <label class="form-label">Дата зарахування в списки частини</label>
+        <select
+          id="enlistment_date"
+          name="enlistment_date"
+          class="d-none"
+          data-mh-no-tom
+          required
+          tabindex="-1"
+          aria-hidden="true"
+        >
+          <option value="">Оберіть варіант</option>
+          <option value="з моменту призову">З моменту призову</option>
+          <option value="custom">Вказати конкретну дату</option>
+        </select>
+        <div
+          class="mh-choice-chips"
+          data-mh-choice-for="enlistment_date"
+          role="group"
+          aria-label="Дата зарахування"
+        >
+          <button
+            type="button"
+            class="mh-choice-chip"
+            data-value="з моменту призову"
+          >
+            З моменту призову
+          </button>
+          <button type="button" class="mh-choice-chip" data-value="custom">
+            Вказати дату
+          </button>
+        </div>
+        <div id="enlistment_date_custom_wrap" class="mh-choice-date d-none">
+          <input
+            type="text"
+            id="enlistment_date_custom"
+            name="enlistment_date_custom"
+            class="form-control mh-date"
+            data-mh-date-max-year="now"
+            placeholder="дд.мм.рррр"
+            inputmode="numeric"
+            title="Введіть дату у форматі дд.мм.рррр"
+          />
+        </div>
+      </div>
+
+      <div class="mh-dossier-section">
+        <label class="form-label">Під медичним наглядом по</label>
+        <select
+          id="observation_end"
+          name="observation_end"
+          class="d-none"
+          data-mh-no-tom
+          required
+          tabindex="-1"
+          aria-hidden="true"
+        >
+          <option value="">Оберіть варіант</option>
+          <option value="по теперішній час">По теперішній час</option>
+          <option value="custom">Вказати конкретну дату</option>
+        </select>
+        <div
+          class="mh-choice-chips"
+          data-mh-choice-for="observation_end"
+          role="group"
+          aria-label="Під медичним наглядом"
+        >
+          <button
+            type="button"
+            class="mh-choice-chip"
+            data-value="по теперішній час"
+          >
+            По теперішній час
+          </button>
+          <button type="button" class="mh-choice-chip" data-value="custom">
+            Вказати дату
+          </button>
+        </div>
+        <div id="observation_end_custom_wrap" class="mh-choice-date d-none">
+          <input
+            type="text"
+            id="observation_end_custom"
+            name="observation_end_custom"
+            class="form-control mh-date"
+            data-mh-date-max-year="now"
+            placeholder="дд.мм.рррр"
+            inputmode="numeric"
+            title="Введіть дату у форматі дд.мм.рррр"
+          />
+        </div>
+      </div>
+
+      <div class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Підпис</p>
+        <div class="mb-3">
+          <label for="signatory" class="form-label">Підписує характеристику</label>
+          <select
+            id="signatory"
+            name="signatory"
+            class="form-select"
+            data-mh-no-tom
+            required
+          >
+            <option value="">Оберіть підписанта</option>
+            <option value="acting_chief">
+              Т. в. о. начальника медичної служби секції тилу капітан м\с
+              Ірина ГОНЧАРОВА
+            </option>
+            <option value="chief">
+              Начальник медичної служби секції тилу майор м/с Юлія ЮРЧАК
+            </option>
+            <option value="company_commander">
+              Командир медичної роти капітан м/с Євгеній МАЖАЄВ
+            </option>
+          </select>
+        </div>
+        <div class="form-check mb-0">
+          <input
+            type="checkbox"
+            id="no_diagnosis"
+            name="no_diagnosis"
+            value="yes"
+            class="form-check-input"
+          />
+          <label for="no_diagnosis" class="form-check-label">
+            Для службового розслідування (без діагнозів)
+          </label>
+        </div>
+      </div>
+
+      <div class="mh-dossier-actions">
+        <button
+          id="submit-button"
+          type="submit"
+          class="btn btn-primary btn-lg"
+        >
+          <i class="fas fa-file-medical me-2"></i>
+          Створити медичну характеристику
+        </button>
+      </div>
+    </div>
+  </form>
 </div>
 {% endblock %} {% block extra_css %}
 <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet" />
@@ -314,6 +319,7 @@ endblock %} {% block content %}
 {% endblock %} {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/date_input.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
 <script>
   const form = document.getElementById("generation-form");
@@ -518,45 +524,22 @@ endblock %} {% block content %}
       : "Показати ПІБ (в родовому відмінку)";
   }
 
-  // Валідація дати
-  function validateDate(dateString) {
-    const pattern = /^(\d{2})\.(\d{2})\.(\d{4})$/;
-    const match = dateString.match(pattern);
-    if (!match) return false;
-
-    const day = parseInt(match[1], 10);
-    const month = parseInt(match[2], 10);
-    const year = parseInt(match[3], 10);
-
-    if (month < 1 || month > 12) return false;
-    if (day < 1 || day > 31) return false;
-    if (year < 1900 || year > new Date().getFullYear()) return false;
-
-    const date = new Date(year, month - 1, day);
-    return (
-      date.getDate() === day &&
-      date.getMonth() === month - 1 &&
-      date.getFullYear() === year
-    );
-  }
-
   document.addEventListener("DOMContentLoaded", function () {
+    initDateInputs("#generation-form");
     initFormTomSelects("#generation-form", {
       skipIds: [
         "pib_nazivnyi",
         "no_diagnosis",
+        "enlistment_date",
         "enlistment_date_custom",
+        "observation_end",
         "observation_end_custom",
+        "birth_date",
+        "zvanie",
+        "sluzhba_type",
+        "signatory",
+        "pib_rodovyi",
       ],
-      selectCreateIds: ["zvanie"],
-      onChangeMap: {
-        enlistment_date: function () {
-          toggleCustomDate();
-        },
-        observation_end: function () {
-          toggleObservationEndCustomDate();
-        },
-      },
     });
 
     document
@@ -580,49 +563,53 @@ endblock %} {% block content %}
       onClear: clearPibSelection,
     });
 
+    initChoiceChips();
     toggleCustomDate();
     toggleObservationEndCustomDate();
   });
+
+  function syncChoiceChips(selectId) {
+    const select = document.getElementById(selectId);
+    const group = document.querySelector(
+      '.mh-choice-chips[data-mh-choice-for="' + selectId + '"]'
+    );
+    if (!select || !group) return;
+    const value = select.value || "";
+    group.querySelectorAll(".mh-choice-chip").forEach(function (chip) {
+      chip.classList.toggle("is-active", chip.getAttribute("data-value") === value);
+    });
+  }
+
+  function initChoiceChips() {
+    document.querySelectorAll(".mh-choice-chips[data-mh-choice-for]").forEach(function (group) {
+      const selectId = group.getAttribute("data-mh-choice-for");
+      const select = document.getElementById(selectId);
+      if (!select) return;
+      group.querySelectorAll(".mh-choice-chip").forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          const value = chip.getAttribute("data-value") || "";
+          select.value = value;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          if (selectId === "enlistment_date") toggleCustomDate();
+          if (selectId === "observation_end") toggleObservationEndCustomDate();
+          syncChoiceChips(selectId);
+        });
+      });
+      syncChoiceChips(selectId);
+    });
+  }
 
   // Валідація полів
   document
     .getElementById("enlistment_date")
     .addEventListener("change", function () {
-      const value = getTomValue(this);
+      const value = this.value;
       if (!value) {
         this.setCustomValidity("Оберіть варіант дати призову");
       } else if (value === "з моменту призову" || value === "custom") {
         this.setCustomValidity("");
       } else {
         this.setCustomValidity("Оберіть валідний варіант");
-      }
-    });
-
-  document.getElementById("birth_date").addEventListener("blur", function () {
-    if (this.value && !validateDate(this.value)) {
-      this.setCustomValidity("Введіть коректну дату у форматі дд.мм.рррр");
-    } else {
-      this.setCustomValidity("");
-    }
-  });
-
-  document
-    .getElementById("enlistment_date_custom")
-    .addEventListener("blur", function () {
-      if (this.value && !validateDate(this.value)) {
-        this.setCustomValidity("Введіть коректну дату у форматі дд.мм.рррр");
-      } else {
-        this.setCustomValidity("");
-      }
-    });
-
-  document
-    .getElementById("observation_end_custom")
-    .addEventListener("blur", function () {
-      if (this.value && !validateDate(this.value)) {
-        this.setCustomValidity("Введіть коректну дату у форматі дд.мм.рррр");
-      } else {
-        this.setCustomValidity("");
       }
     });
 
@@ -633,7 +620,7 @@ endblock %} {% block content %}
     const enlistmentSelect = document.getElementById("enlistment_date");
     const customInput = document.getElementById("enlistment_date_custom");
 
-    if (getTomValue(enlistmentSelect) === "custom" && !customInput.value) {
+    if (enlistmentSelect.value === "custom" && !customInput.value) {
       customInput.setCustomValidity("Вкажіть конкретну дату");
       customInput.reportValidity();
       return false;
@@ -641,7 +628,7 @@ endblock %} {% block content %}
 
     const observationSelect = document.getElementById("observation_end");
     const observationCustom = document.getElementById("observation_end_custom");
-    if (getTomValue(observationSelect) === "custom" && !observationCustom.value) {
+    if (observationSelect.value === "custom" && !observationCustom.value) {
       observationCustom.setCustomValidity("Вкажіть конкретну дату");
       observationCustom.reportValidity();
       return false;
@@ -777,14 +764,15 @@ endblock %} {% block content %}
   function toggleCustomDate() {
     const select = document.getElementById("enlistment_date");
     const customInput = document.getElementById("enlistment_date_custom");
-    const value = getTomValue(select);
+    const wrap = document.getElementById("enlistment_date_custom_wrap");
+    const value = select ? select.value : "";
 
     if (value === "custom") {
-      customInput.style.display = "block";
+      if (wrap) wrap.classList.remove("d-none");
       customInput.required = true;
       select.setCustomValidity("");
     } else {
-      customInput.style.display = "none";
+      if (wrap) wrap.classList.add("d-none");
       customInput.required = false;
       customInput.value = "";
       customInput.setCustomValidity("");
@@ -796,20 +784,22 @@ endblock %} {% block content %}
         select.setCustomValidity("Оберіть валідний варіант");
       }
     }
+    syncChoiceChips("enlistment_date");
   }
 
   // Перемикання між варіантами завершення нагляду
   function toggleObservationEndCustomDate() {
     const select = document.getElementById("observation_end");
     const customInput = document.getElementById("observation_end_custom");
-    const value = getTomValue(select);
+    const wrap = document.getElementById("observation_end_custom_wrap");
+    const value = select ? select.value : "";
 
     if (value === "custom") {
-      customInput.style.display = "block";
+      if (wrap) wrap.classList.remove("d-none");
       customInput.required = true;
       select.setCustomValidity("");
     } else {
-      customInput.style.display = "none";
+      if (wrap) wrap.classList.add("d-none");
       customInput.required = false;
       customInput.value = "";
       customInput.setCustomValidity("");
@@ -821,6 +811,7 @@ endblock %} {% block content %}
         select.setCustomValidity("Оберіть валідний варіант");
       }
     }
+    syncChoiceChips("observation_end");
   }
 </script>
 {% endblock %}

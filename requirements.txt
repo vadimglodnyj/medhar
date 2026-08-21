@@ -13,5 +13,15 @@ pymorphy3-dicts-uk>=2.4.0
 python-dotenv>=1.0.0
 google-genai>=1.0.0
 dropbox>=12.0.0
+# Pure-Python клієнт спільної Turso/libSQL БД (працює на Windows/Python 3.14)
+libsql-client>=0.3.1
+# Шифрування спільного пакету команди (PIN)
+cryptography>=42.0.0
+# Desktop-вікно (Edge WebView2)
+pywebview>=5.0.0
 # PDF-направлення (конвертація DOCX→PDF через Microsoft Word на Windows)
 pywin32>=306; platform_system=="Windows"
+
+# Збірка Windows Install.exe (лише для розробника):
+#   pip install pyinstaller
+#   .\desktop\build.ps1

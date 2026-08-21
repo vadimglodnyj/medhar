@@ -1,272 +1,220 @@
 {% extends "base.html" %}
 {% block title %}Рапорти - Медичний пункт батальйону{% endblock %}
 {% block content %}
-<div class="container">
-  <div class="row justify-content-center">
-    <div class="col-lg-10">
-      <div class="page-header text-center">
-        <h1><i class="fas fa-file-lines me-2"></i>Рапорти</h1>
-        <p class="lead">ВЛК, госпіталізація, консультація, реабілітація, матдопомога, оздоровлення, відпустка</p>
-      </div>
-
-      {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-      {% for category, message in messages %}
-      <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
-        {{ message }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-      </div>
-      {% endfor %}
-      {% endif %}
-      {% endwith %}
-
-      <div class="card">
-        <div class="card-header">
-          <h5 class="mh-section-title mb-0"><i class="fas fa-pen"></i>Заповніть дані рапорту</h5>
-        </div>
-        <div class="card-body">
-          <form id="generation-form" method="POST">
-            <h6 class="mb-3">Тип рапорту</h6>
-            <div class="row">
-              <div class="col-md-6 mb-3">
-                <label for="report_type" class="form-label">Тип</label>
-                <select id="report_type" name="report_type" class="form-select" required>
-                  <option value="vlk" {% if defaults.report_type == 'vlk' %}selected{% endif %}>Рапорт на ВЛК</option>
-                  <option value="hospitalization" {% if defaults.report_type == 'hospitalization' %}selected{% endif %}>Рапорт на госпіталізацію</option>
-                  <option value="consultation" {% if defaults.report_type == 'consultation' %}selected{% endif %}>Рапорт на консультацію</option>
-                  <option value="rehabilitation" {% if defaults.report_type == 'rehabilitation' %}selected{% endif %}>Рапорт на реабілітацію</option>
-                  <option value="material_aid" {% if defaults.report_type == 'material_aid' %}selected{% endif %}>Рапорт на матеріальну допомогу</option>
-                  <option value="ozdorovlennya" {% if defaults.report_type == 'ozdorovlennya' %}selected{% endif %}>Рапорт на оздоровлення</option>
-                  <option value="vacation" {% if defaults.report_type == 'vacation' %}selected{% endif %}>Рапорт на відпустку</option>
-                </select>
-              </div>
-              <div class="col-md-6 mb-3" id="sluzhba-type-wrap">
-                <label for="sluzhba_type" class="form-label">Тип служби</label>
-                <select id="sluzhba_type" name="sluzhba_type" class="form-select">
-                  <option value="за мобілізацією" {% if defaults.sluzhba_type != 'за контрактом' %}selected{% endif %}>за мобілізацією</option>
-                  <option value="за контрактом" {% if defaults.sluzhba_type == 'за контрактом' %}selected{% endif %}>за контрактом</option>
-                </select>
-              </div>
-            </div>
-
-            <hr />
-            <div id="misce-napravlennya-wrap" style="display: none;">
-              <h6 class="mb-3" id="misce-napravlennya-title">Місце направлення</h6>
-              <div class="mb-3">
-                <label for="misce_napravlennya" class="form-label" id="misce-napravlennya-label">ЛПЗ</label>
-                <select id="misce_napravlennya" name="misce_napravlennya" placeholder="Почніть вводити назву ЛПЗ...">
-                  {% if defaults.misce_napravlennya %}
-                  <option value="{{ defaults.misce_napravlennya }}" selected>{{ defaults.misce_napravlennya }}</option>
-                  {% endif %}
-                </select>
-              </div>
-              <div class="mb-3" id="hospitalization-date-wrap" style="display: none;">
-                <label for="data_gospitalizatsii" class="form-label">Дата госпіталізації</label>
-                <input type="text" id="data_gospitalizatsii" name="data_gospitalizatsii" class="form-control" value="{{ defaults.data_gospitalizatsii }}" placeholder="дд.мм.рррр" />
-              </div>
-              <hr />
-            </div>
-
-            <div id="rehabilitation-fields-wrap" style="display: none;">
-              <h6 class="mb-3">Реабілітація</h6>
-              <div class="row">
-                <div class="col-md-4 mb-3">
-                  <label for="rehab_mrc" class="form-label">МРЦ</label>
-                  <input
-                    type="text"
-                    id="rehab_mrc"
-                    name="rehab_mrc"
-                    class="form-control"
-                    value="{{ defaults.rehab_mrc or 'Пуща-Водиця' }}"
-                    placeholder="Пуща-Водиця"
-                  />
-                  <div class="form-text">У текст рапорту підставляється як «МРЦ «…»».</div>
-                </div>
-                <div class="col-md-4 mb-3">
-                  <label for="rehab_days" class="form-label">Тривалість (календарні дні)</label>
-                  <input
-                    type="number"
-                    id="rehab_days"
-                    name="rehab_days"
-                    class="form-control"
-                    value="{{ defaults.rehab_days or '21' }}"
-                    min="1"
-                    max="365"
-                  />
-                </div>
-              </div>
-              <hr />
-            </div>
-
-            <div id="vacation-fields-wrap" style="display: none;">
-              <h6 class="mb-3">Дані відпустки</h6>
-              <div class="row">
-                <div class="col-md-4 mb-3">
-                  <label for="vacantion_start_day" class="form-label">Дата початку відпустки</label>
-                  <input
-                    type="text"
-                    id="vacantion_start_day"
-                    name="vacantion_start_day"
-                    class="form-control"
-                    value="{{ defaults.vacantion_start_day }}"
-                    placeholder="дд.мм.рррр"
-                  />
-                </div>
-                <div class="col-md-4 mb-3">
-                  <label for="vacantion_phone" class="form-label">Телефон для зв’язку</label>
-                  <input
-                    type="text"
-                    id="vacantion_phone"
-                    name="vacantion_phone"
-                    class="form-control"
-                    value="{{ defaults.vacantion_phone }}"
-                    placeholder="+380…"
-                  />
-                </div>
-                <div class="col-md-12 mb-3">
-                  <label for="vacantion_adress" class="form-label">Адреса проведення відпустки</label>
-                  <input
-                    type="text"
-                    id="vacantion_adress"
-                    name="vacantion_adress"
-                    class="form-control"
-                    value="{{ defaults.vacantion_adress }}"
-                    placeholder="Область, місто, вулиця, будинок"
-                  />
-                </div>
-              </div>
-              <hr />
-            </div>
-
-            <div id="dodatok-section-wrap">
-            <h6 class="mb-3">Додаток до рапорту</h6>
-            <div id="medical-dodatok-wrap">
-              <div class="row">
-                <div class="col-md-5 mb-3">
-                  <label for="oglyad_nuber" class="form-label">Номер консультативного висновку спеціаліста</label>
-                  <input type="text" id="oglyad_nuber" name="oglyad_nuber" class="form-control" value="{{ defaults.oglyad_nuber }}" />
-                </div>
-                <div class="col-md-7 mb-3">
-                  <label for="likar" class="form-label">Спеціалізація лікаря</label>
-                  <select id="likar" name="likar" required placeholder="Почніть вводити спеціалізацію...">
-                    {% if defaults.likar %}
-                    <option value="{{ defaults.likar }}" selected>{{ defaults.likar }}</option>
-                    {% endif %}
-                  </select>
-                </div>
-              </div>
-              <div class="mb-3">
-                <label for="hospital" class="form-label">Назва ЛПЗ</label>
-                <select id="hospital" name="hospital" required placeholder="Почніть вводити назву ЛПЗ...">
-                  {% if defaults.hospital %}
-                  <option value="{{ defaults.hospital }}" selected>{{ defaults.hospital }}</option>
-                  {% endif %}
-                </select>
-                <div class="form-text">ЛПЗ, яке видало висновок (для рядка «До рапорту додаю»).</div>
-              </div>
-            </div>
-            <div id="free-dodatok-wrap" style="display: none;">
-              <div class="mb-3">
-                <label for="dodatok" class="form-label">Що додається до рапорту</label>
-                <input
-                  type="text"
-                  id="dodatok"
-                  name="dodatok"
-                  class="form-control"
-                  value="{{ defaults.dodatok }}"
-                  placeholder="Наприклад: Копія форми 001 від 22.07.2026"
-                />
-                <div class="form-text">Вільний текст без префікса «Копію консультативного висновку» — наприклад: «Копія форми 001 від 22.07.2026».</div>
-              </div>
-            </div>
-            </div>
-
-            <hr />
-            <h6 class="mb-3">Військовослужбовець</h6>
-            <div class="mb-3">
-              <label for="pib_nazivnyi" class="form-label"><i class="fas fa-user me-1"></i>ПІБ (автокомпліт)</label>
-              <select id="pib_nazivnyi" name="pib_nazivnyi" required placeholder="Почніть вводити ПІБ...">
-                {% if defaults.pib_nazivnyi %}
-                <option value="{{ defaults.pib_nazivnyi }}" selected>{{ defaults.pib_nazivnyi }}</option>
-                {% endif %}
-              </select>
-              <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
-            </div>
-
-            <hr />
-            <h6 class="mb-3">Підписанти</h6>
-            <div class="mb-3">
-              <label for="tvo_kombrig_select" class="form-label">ТВО командира частини</label>
-              <select id="tvo_kombrig_select" class="form-select" required>
-                <option value="">Оберіть підписанта</option>
-                {% for opt in defaults.kombrig_options %}
-                <option
-                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
-                  {% if opt.zvannya == defaults.tvo_kombrig_zvannya and opt.pib == defaults.tvo_kombrig_pib %}selected{% endif %}
-                >{{ opt.zvannya }} {{ opt.pib }}</option>
-                {% endfor %}
-              </select>
-              <input type="hidden" id="tvo_kombrig_zvannya" name="tvo_kombrig_zvannya" value="{{ defaults.tvo_kombrig_zvannya }}" required />
-              <input type="hidden" id="tvo_kombrig_pib" name="tvo_kombrig_pib" value="{{ defaults.tvo_kombrig_pib }}" required />
-            </div>
-            <div class="mb-3">
-              <label for="tvo_kombat_select" class="form-label">ТВО командира батальйону</label>
-              <select id="tvo_kombat_select" class="form-select" required>
-                <option value="">Оберіть підписанта</option>
-                {% for opt in defaults.kombat_options %}
-                <option
-                  value="{{ opt.zvannya }}|||{{ opt.pib }}"
-                  {% if opt.zvannya == defaults.tvo_kombat_zvannya and opt.pib == defaults.tvo_kombat_pib %}selected{% endif %}
-                >{{ opt.zvannya }} {{ opt.pib }}</option>
-                {% endfor %}
-              </select>
-              <input type="hidden" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" value="{{ defaults.tvo_kombat_zvannya }}" required />
-              <input type="hidden" id="tvo_kombat_pib" name="tvo_kombat_pib" value="{{ defaults.tvo_kombat_pib }}" required />
-            </div>
-
-            <div class="mb-3">
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#add-signatory-panel" aria-expanded="false">
-                <i class="fas fa-user-plus me-1"></i>Додати підписанта
-              </button>
-            </div>
-            <div class="collapse mb-3" id="add-signatory-panel">
-              <div class="border rounded p-3 bg-white">
-                <div class="row g-2">
-                  <div class="col-md-3">
-                    <label for="new_signatory_role" class="form-label">Роль</label>
-                    <select id="new_signatory_role" class="form-select">
-                      <option value="kombrig">ТВО командира частини</option>
-                      <option value="kombat">ТВО командира батальйону</option>
-                    </select>
-                  </div>
-                  <div class="col-md-3">
-                    <label for="new_signatory_zvannya" class="form-label">Звання</label>
-                    <input type="text" id="new_signatory_zvannya" class="form-control" placeholder="капітан" />
-                  </div>
-                  <div class="col-md-4">
-                    <label for="new_signatory_pib" class="form-label">ПІБ (називний)</label>
-                    <input type="text" id="new_signatory_pib" class="form-control" placeholder="Ім'я ПРІЗВИЩЕ" />
-                  </div>
-                  <div class="col-md-2 d-flex align-items-end">
-                    <button type="button" id="add-signatory-btn" class="btn btn-primary w-100">
-                      <i class="fas fa-plus me-1"></i>Додати
-                    </button>
-                  </div>
-                </div>
-                <div id="add-signatory-msg" class="small text-muted mt-2"></div>
-              </div>
-            </div>
-
-            <div class="d-grid">
-              <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
-                <i class="fas fa-file-word me-2"></i><span id="submit-button-label">Створити рапорт на ВЛК</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
+<div class="mh-shell mh-dossier">
+  <div class="mh-dossier-header">
+    <div class="page-header">
+      <h1><i class="fas fa-file-lines me-2"></i>Рапорти</h1>
+      <p class="lead">ВЛК, госпіталізація, консультація, реабілітація, матдопомога, оздоровлення, відпустка</p>
     </div>
   </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  {% for category, message in messages %}
+  <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show">
+    {{ message }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <form id="generation-form" method="POST" class="mh-dossier-grid">
+    <aside class="mh-dossier-panel mh-dossier-panel--person">
+      <h2 class="mh-dossier-panel-title"><i class="fas fa-user"></i>Військовослужбовець</h2>
+      <div class="mh-dossier-section">
+        <label for="pib_nazivnyi" class="form-label">ПІБ</label>
+        <select id="pib_nazivnyi" name="pib_nazivnyi" required placeholder="Почніть вводити ПІБ...">
+          {% if defaults.pib_nazivnyi %}
+          <option value="{{ defaults.pib_nazivnyi }}" selected>{{ defaults.pib_nazivnyi }}</option>
+          {% endif %}
+        </select>
+        <div id="pib-info-alert" class="alert alert-success mt-2 mb-0 py-2 d-none" role="status"></div>
+      </div>
+      <div class="mh-dossier-section" id="sluzhba-type-wrap">
+        <label for="sluzhba_type" class="form-label">Тип служби</label>
+        <select id="sluzhba_type" name="sluzhba_type" class="form-select" data-mh-no-tom>
+          <option value="за мобілізацією" {% if defaults.sluzhba_type != 'за контрактом' %}selected{% endif %}>за мобілізацією</option>
+          <option value="за контрактом" {% if defaults.sluzhba_type == 'за контрактом' %}selected{% endif %}>за контрактом</option>
+        </select>
+      </div>
+    </aside>
+
+    <div class="mh-dossier-panel">
+      <h2 class="mh-dossier-panel-title"><i class="fas fa-file-lines"></i>Параметри рапорту</h2>
+
+      <div class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Тип</p>
+        <label for="report_type" class="form-label">Тип рапорту</label>
+        <select id="report_type" name="report_type" class="form-select" data-mh-no-tom required>
+          <option value="vlk" {% if defaults.report_type == 'vlk' %}selected{% endif %}>Рапорт на ВЛК</option>
+          <option value="hospitalization" {% if defaults.report_type == 'hospitalization' %}selected{% endif %}>Рапорт на госпіталізацію</option>
+          <option value="consultation" {% if defaults.report_type == 'consultation' %}selected{% endif %}>Рапорт на консультацію</option>
+          <option value="rehabilitation" {% if defaults.report_type == 'rehabilitation' %}selected{% endif %}>Рапорт на реабілітацію</option>
+          <option value="material_aid" {% if defaults.report_type == 'material_aid' %}selected{% endif %}>Рапорт на матеріальну допомогу</option>
+          <option value="ozdorovlennya" {% if defaults.report_type == 'ozdorovlennya' %}selected{% endif %}>Рапорт на оздоровлення</option>
+          <option value="vacation" {% if defaults.report_type == 'vacation' %}selected{% endif %}>Рапорт на відпустку</option>
+        </select>
+      </div>
+
+      <div class="mh-dossier-section" id="misce-napravlennya-wrap" style="display: none;">
+        <p class="mh-dossier-section-label" id="misce-napravlennya-title">Місце направлення</p>
+        <div class="mb-3">
+          <label for="misce_napravlennya" class="form-label" id="misce-napravlennya-label">ЛПЗ</label>
+          <select id="misce_napravlennya" name="misce_napravlennya" placeholder="Почніть вводити назву ЛПЗ...">
+            {% if defaults.misce_napravlennya %}
+            <option value="{{ defaults.misce_napravlennya }}" selected>{{ defaults.misce_napravlennya }}</option>
+            {% endif %}
+          </select>
+        </div>
+        <div class="mb-0" id="hospitalization-date-wrap" style="display: none;">
+          <label for="data_gospitalizatsii" class="form-label">Дата госпіталізації</label>
+          <input type="text" id="data_gospitalizatsii" name="data_gospitalizatsii" class="form-control mh-date" value="{{ defaults.data_gospitalizatsii }}" placeholder="дд.мм.рррр" inputmode="numeric" />
+        </div>
+      </div>
+
+      <div class="mh-dossier-section" id="rehabilitation-fields-wrap" style="display: none;">
+        <p class="mh-dossier-section-label">Реабілітація</p>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label for="rehab_mrc" class="form-label">МРЦ</label>
+            <input type="text" id="rehab_mrc" name="rehab_mrc" class="form-control" data-mh-no-tom value="{{ defaults.rehab_mrc or 'Пуща-Водиця' }}" placeholder="Пуща-Водиця" />
+            <div class="form-text">У текст рапорту підставляється як «МРЦ «…»».</div>
+          </div>
+          <div class="col-md-6">
+            <label for="rehab_days" class="form-label">Тривалість (календарні дні)</label>
+            <input type="number" id="rehab_days" name="rehab_days" class="form-control" data-mh-no-tom value="{{ defaults.rehab_days or '21' }}" min="1" max="365" />
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-section" id="vacation-fields-wrap" style="display: none;">
+        <p class="mh-dossier-section-label">Відпустка</p>
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label for="vacantion_start_day" class="form-label">Дата початку</label>
+            <input type="text" id="vacantion_start_day" name="vacantion_start_day" class="form-control mh-date" value="{{ defaults.vacantion_start_day }}" placeholder="дд.мм.рррр" inputmode="numeric" />
+          </div>
+          <div class="col-md-4">
+            <label for="vacantion_phone" class="form-label">Телефон</label>
+            <input type="text" id="vacantion_phone" name="vacantion_phone" class="form-control" data-mh-no-tom value="{{ defaults.vacantion_phone }}" placeholder="+380…" />
+          </div>
+          <div class="col-md-12">
+            <label for="vacantion_adress" class="form-label">Адреса проведення відпустки</label>
+            <input type="text" id="vacantion_adress" name="vacantion_adress" class="form-control" data-mh-no-tom value="{{ defaults.vacantion_adress }}" placeholder="Область, місто, вулиця, будинок" />
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-section" id="dodatok-section-wrap">
+        <p class="mh-dossier-section-label">Додаток</p>
+        <div id="medical-dodatok-wrap">
+          <div class="row g-3">
+            <div class="col-md-5">
+              <label for="oglyad_nuber" class="form-label">Номер консультативного висновку</label>
+              <input type="text" id="oglyad_nuber" name="oglyad_nuber" class="form-control" data-mh-no-tom value="{{ defaults.oglyad_nuber }}" />
+            </div>
+            <div class="col-md-7">
+              <label for="likar" class="form-label">Спеціалізація лікаря</label>
+              <select id="likar" name="likar" required placeholder="Почніть вводити спеціалізацію...">
+                {% if defaults.likar %}
+                <option value="{{ defaults.likar }}" selected>{{ defaults.likar }}</option>
+                {% endif %}
+              </select>
+            </div>
+            <div class="col-12">
+              <label for="hospital" class="form-label">Назва ЛПЗ</label>
+              <select id="hospital" name="hospital" required placeholder="Почніть вводити назву ЛПЗ...">
+                {% if defaults.hospital %}
+                <option value="{{ defaults.hospital }}" selected>{{ defaults.hospital }}</option>
+                {% endif %}
+              </select>
+              <div class="form-text">ЛПЗ, яке видало висновок (для рядка «До рапорту додаю»).</div>
+            </div>
+          </div>
+        </div>
+        <div id="free-dodatok-wrap" style="display: none;">
+          <div class="mb-0">
+            <label for="dodatok" class="form-label">Що додається до рапорту</label>
+            <input type="text" id="dodatok" name="dodatok" class="form-control" data-mh-no-tom value="{{ defaults.dodatok }}" placeholder="Наприклад: Копія форми 001 від 22.07.2026" />
+            <div class="form-text">Вільний текст без префікса «Копію консультативного висновку».</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-section">
+        <p class="mh-dossier-section-label">Підписанти</p>
+        <div class="mb-3">
+          <label for="tvo_kombrig_select" class="form-label">ТВО командира частини</label>
+          <select id="tvo_kombrig_select" class="form-select" required>
+            <option value="">Оберіть підписанта</option>
+            {% for opt in defaults.kombrig_options %}
+            <option
+              value="{{ opt.zvannya }}|||{{ opt.pib }}"
+              {% if opt.zvannya == defaults.tvo_kombrig_zvannya and opt.pib == defaults.tvo_kombrig_pib %}selected{% endif %}
+            >{{ opt.zvannya }} {{ opt.pib }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" id="tvo_kombrig_zvannya" name="tvo_kombrig_zvannya" value="{{ defaults.tvo_kombrig_zvannya }}" required />
+          <input type="hidden" id="tvo_kombrig_pib" name="tvo_kombrig_pib" value="{{ defaults.tvo_kombrig_pib }}" required />
+        </div>
+        <div class="mb-3">
+          <label for="tvo_kombat_select" class="form-label">ТВО командира батальйону</label>
+          <select id="tvo_kombat_select" class="form-select" required>
+            <option value="">Оберіть підписанта</option>
+            {% for opt in defaults.kombat_options %}
+            <option
+              value="{{ opt.zvannya }}|||{{ opt.pib }}"
+              {% if opt.zvannya == defaults.tvo_kombat_zvannya and opt.pib == defaults.tvo_kombat_pib %}selected{% endif %}
+            >{{ opt.zvannya }} {{ opt.pib }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" id="tvo_kombat_zvannya" name="tvo_kombat_zvannya" value="{{ defaults.tvo_kombat_zvannya }}" required />
+          <input type="hidden" id="tvo_kombat_pib" name="tvo_kombat_pib" value="{{ defaults.tvo_kombat_pib }}" required />
+        </div>
+
+        <div class="mb-3">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#add-signatory-panel" aria-expanded="false">
+            <i class="fas fa-user-plus me-1"></i>Додати підписанта
+          </button>
+        </div>
+        <div class="collapse mb-0" id="add-signatory-panel">
+          <div class="border rounded p-3 mh-inset-panel">
+            <div class="row g-2">
+              <div class="col-md-3">
+                <label for="new_signatory_role" class="form-label">Роль</label>
+                <select id="new_signatory_role" class="form-select" data-mh-no-tom>
+                  <option value="kombrig">ТВО командира частини</option>
+                  <option value="kombat">ТВО командира батальйону</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label for="new_signatory_zvannya" class="form-label">Звання</label>
+                <input type="text" id="new_signatory_zvannya" class="form-control" data-mh-no-tom placeholder="капітан" />
+              </div>
+              <div class="col-md-4">
+                <label for="new_signatory_pib" class="form-label">ПІБ (називний)</label>
+                <input type="text" id="new_signatory_pib" class="form-control" data-mh-no-tom placeholder="Ім'я ПРІЗВИЩЕ" />
+              </div>
+              <div class="col-md-2 d-flex align-items-end">
+                <button type="button" id="add-signatory-btn" class="btn btn-primary w-100">
+                  <i class="fas fa-plus me-1"></i>Додати
+                </button>
+              </div>
+            </div>
+            <div id="add-signatory-msg" class="small text-muted mt-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mh-dossier-actions">
+        <button id="submit-button" type="submit" class="btn btn-primary btn-lg">
+          <i class="fas fa-file-word me-2"></i><span id="submit-button-label">Створити рапорт на ВЛК</span>
+        </button>
+      </div>
+    </div>
+  </form>
 </div>
 {% endblock %}
 
@@ -278,6 +226,7 @@
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <script src="{{ url_for('static', filename='js/form_tom_select.js') }}"></script>
+<script src="{{ url_for('static', filename='js/date_input.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pib_tom_select.js') }}"></script>
 <script src="{{ url_for('static', filename='js/lpz_tom_select.js') }}"></script>
 <script>
@@ -555,16 +504,30 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    initFormTomSelects(".col-lg-10", {
+    initDateInputs(".mh-shell");
+    initFormTomSelects(".mh-shell", {
       skipIds: [
         "pib_nazivnyi",
         "hospital",
         "misce_napravlennya",
         "likar",
+        "data_gospitalizatsii",
+        "vacantion_start_day",
         "tvo_kombrig_zvannya",
         "tvo_kombrig_pib",
         "tvo_kombat_zvannya",
         "tvo_kombat_pib",
+        "report_type",
+        "sluzhba_type",
+        "rehab_mrc",
+        "rehab_days",
+        "vacantion_phone",
+        "vacantion_adress",
+        "oglyad_nuber",
+        "dodatok",
+        "new_signatory_role",
+        "new_signatory_zvannya",
+        "new_signatory_pib",
       ],
       searchableIds: ["tvo_kombrig_select", "tvo_kombat_select"],
       clearButtonIds: ["tvo_kombrig_select", "tvo_kombat_select"],

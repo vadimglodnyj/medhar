@@ -1,0 +1,629 @@
+{% extends "base.html" %}
+{% block title %}Задачі команди — МПБ{% endblock %}
+{% block content %}
+<div class="mh-shell">
+  <div class="page-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <div>
+      <h1 class="mb-1"><i class="fas fa-table-columns me-2"></i>Задачі команди</h1>
+      <p class="text-muted mb-0">
+        Перетягніть картку в «В роботі» — керівник дізнається, що задачу прийнято.
+        У «Готово» — що її виконано.
+      </p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <button type="button" class="btn btn-outline-primary" id="members-btn">
+        <i class="fas fa-users me-1"></i>Команда
+      </button>
+      <button type="button" class="btn btn-primary" id="task-new-btn">
+        <i class="fas fa-plus me-1"></i>Нова задача
+      </button>
+    </div>
+  </div>
+
+  <div class="mh-kanban" id="kanban">
+    {% for col in columns %}
+    <section class="mh-kanban-col" data-status="{{ col.id }}">
+      <div class="mh-kanban-col-header">
+        <h2>{{ col.label }}</h2>
+        <span class="mh-kanban-count" data-count>{{ grouped[col.id]|length }}</span>
+      </div>
+      <div class="mh-kanban-list" data-list>
+        {% for task in grouped[col.id] %}
+        <article class="mh-task-card" draggable="true" data-id="{{ task.id }}"
+                 data-title="{{ task.title|e }}"
+                 data-description="{{ task.description|e }}"
+                 data-assignee="{{ task.assignee|e }}"
+                 data-member-sync-id="{{ (task.member_sync_ids or [])|join(',') }}"
+                 data-deadline="{{ task.deadline|e }}">
+          <h3>{{ task.title }}</h3>
+          {% if task.description %}
+          <p>{{ task.description }}</p>
+          {% endif %}
+          {% if task.deadline or task.assignees %}
+          <div class="mh-task-meta">
+            {% if task.deadline %}
+            <span class="mh-task-due{% if task.deadline_overdue %} is-overdue{% endif %}">
+              <i class="fas fa-clock"></i>{{ task.deadline }}
+            </span>
+            {% endif %}
+            {% for person in task.assignees %}
+            <span class="mh-task-assignee"><i class="fas fa-user"></i>{{ person.name }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </article>
+        {% else %}
+        <div class="mh-kanban-empty">Порожньо</div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="modal fade" id="taskModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5" id="task-modal-title">Нова задача</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
+      </div>
+      <form id="task-form" data-no-loader>
+        <div class="modal-body">
+          <input type="hidden" id="task-id" value="" />
+          <div class="mb-3">
+            <label class="form-label" for="task-title">Назва</label>
+            <input type="text" class="form-control" id="task-title" maxlength="200" required />
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="task-description">Опис</label>
+            <textarea class="form-control" id="task-description" rows="4" maxlength="4000"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="task-deadline">Дедлайн</label>
+            <input type="text" class="form-control mh-date" id="task-deadline"
+                   inputmode="numeric" autocomplete="off" placeholder="дд.мм.рррр" maxlength="10" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label" id="task-assignees-label">Виконавці</label>
+            <div class="mh-assignee-list" id="task-assignees" role="group" aria-labelledby="task-assignees-label"></div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="task-notify" checked />
+            <label class="form-check-label" for="task-notify">
+              Надіслати сповіщення в Discord
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer justify-content-between">
+          <button type="button" class="btn btn-outline-danger d-none" id="task-delete-btn">Видалити</button>
+          <div class="ms-auto d-flex gap-2">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Скасувати</button>
+            <button type="submit" class="btn btn-primary">Зберегти</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="membersModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5">Команда</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
+      </div>
+      <div class="modal-body">
+        <form id="webhook-form" class="mb-4" data-no-loader>
+          <label class="form-label" for="discord-webhook">Discord webhook каналу</label>
+          <div class="input-group">
+            <input type="url" class="form-control" id="discord-webhook"
+                   placeholder="https://discord.com/api/webhooks/…" />
+            <button type="submit" class="btn btn-outline-primary">Зберегти</button>
+          </div>
+          <div class="form-text">
+            Канал → Редагувати канал → Інтеграції → Вебхуки → Новий вебхук.
+            Webhook і список команди зберігаються в профілі Windows і в спільній папці Excel —
+            після оновлення програми вводити заново не потрібно.
+          </div>
+        </form>
+        <h3 class="h6 mt-1 mb-2">Керівники</h3>
+        <p class="text-muted small mb-2">
+          Отримують Discord-сповіщення, коли задачу беруть у роботу або позначають готовою.
+        </p>
+        <div class="mh-assignee-list mb-4" id="managers-list"></div>
+        <p class="text-muted small mb-2">
+          Discord ID: Налаштування → Додатково → Режим розробника, далі ПКМ по людині → Копіювати ID користувача.
+          Без ID повідомлення все одно прийде в канал, але без особистого пінгу.
+        </p>
+        <div class="mh-member-list mb-3" id="members-list"></div>
+        <form id="member-form" class="row g-2" data-no-loader>
+          <div class="col-sm-5">
+            <input type="text" class="form-control" id="member-name" maxlength="120" placeholder="Ім’я або позивний" required />
+          </div>
+          <div class="col-sm-5">
+            <input type="text" class="form-control" id="member-discord" maxlength="24" placeholder="Discord ID" inputmode="numeric" />
+          </div>
+          <div class="col-sm-2 d-grid">
+            <button type="submit" class="btn btn-primary">Додати</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/date_input.js') }}"></script>
+<script>
+(function initKanban() {
+  const board = document.getElementById("kanban");
+  if (!board) return;
+  const modalEl = document.getElementById("taskModal");
+  const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+  const membersModal = bootstrap.Modal.getOrCreateInstance(document.getElementById("membersModal"));
+  const form = document.getElementById("task-form");
+  const titleInput = document.getElementById("task-title");
+  const descInput = document.getElementById("task-description");
+  const deadlineInput = document.getElementById("task-deadline");
+  const assigneesBox = document.getElementById("task-assignees");
+  const notifyBox = document.getElementById("task-notify");
+  const idInput = document.getElementById("task-id");
+  const modalTitle = document.getElementById("task-modal-title");
+  const deleteBtn = document.getElementById("task-delete-btn");
+  const membersList = document.getElementById("members-list");
+  const managersList = document.getElementById("managers-list");
+  const webhookInput = document.getElementById("discord-webhook");
+  let members = {{ members|tojson }};
+  let discordWebhook = {{ discord_webhook|tojson }};
+  let managerSyncIds = {{ manager_sync_ids|tojson }} || [];
+  let dragged = null;
+  let justDragged = false;
+
+  function esc(text) {
+    return String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function jsonHeaders() {
+    return {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+    };
+  }
+
+  function selectedMembers() {
+    const checked = assigneesBox.querySelectorAll("input[type=checkbox]:checked");
+    const sids = {};
+    Array.prototype.forEach.call(checked, function (el) {
+      if (el.value) sids[el.value] = true;
+    });
+    return members.filter(function (m) { return !!(m.sync_id && sids[m.sync_id]); });
+  }
+
+  function selectedSidsCsv() {
+    return selectedMembers().map(function (m) { return m.sync_id; }).join(",");
+  }
+
+  function fillAssignees(selectedSids, selectedName) {
+    const selected = {};
+    String(selectedSids || "").split(",").forEach(function (sid) {
+      sid = sid.trim();
+      if (sid) selected[sid] = true;
+    });
+    if (!members.length) {
+      assigneesBox.innerHTML = '<div class="mh-kanban-empty">Спочатку додайте виконавців</div>';
+      syncNotifyState();
+      return;
+    }
+    assigneesBox.innerHTML = members.map(function (m) {
+      const sid = m.sync_id || "";
+      const on = !!(sid && selected[sid]);
+      return '<label class="form-check">' +
+        '<input class="form-check-input" type="checkbox" value="' + esc(sid) + '"' +
+        (on ? " checked" : "") + ">" +
+        '<span class="form-check-label">' + esc(m.name) +
+        (m.discord_id ? " · Discord" : "") + "</span></label>";
+    }).join("");
+    if (selectedName && !selectedMembers().length) {
+      const extra = document.createElement("div");
+      extra.className = "text-muted small px-1";
+      extra.textContent = "Раніше: " + selectedName;
+      assigneesBox.appendChild(extra);
+    }
+    syncNotifyState();
+  }
+
+  function syncNotifyState() {
+    const chosen = selectedMembers();
+    const canNotify = !!(discordWebhook && chosen.length);
+    notifyBox.disabled = !canNotify;
+    if (!canNotify) notifyBox.checked = false;
+  }
+
+  function renderManagers() {
+    if (!members.length) {
+      managersList.innerHTML = '<div class="mh-kanban-empty">Спочатку додайте людей нижче</div>';
+      return;
+    }
+    const selected = {};
+    (managerSyncIds || []).forEach(function (sid) {
+      if (sid) selected[sid] = true;
+    });
+    managersList.innerHTML = members.map(function (m) {
+      const sid = m.sync_id || "";
+      const on = !!(sid && selected[sid]);
+      return '<label class="form-check">' +
+        '<input class="form-check-input" type="checkbox" value="' + esc(sid) + '"' +
+        (on ? " checked" : "") + ">" +
+        '<span class="form-check-label">' + esc(m.name) +
+        (m.discord_id ? " · Discord" : "") + "</span></label>";
+    }).join("");
+  }
+
+  function saveManagers() {
+    const checked = managersList.querySelectorAll("input[type=checkbox]:checked");
+    managerSyncIds = Array.prototype.map.call(checked, function (el) {
+      return el.value;
+    }).filter(Boolean);
+    fetch("{{ url_for('api_team_settings') }}", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ manager_sync_ids: managerSyncIds }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          showAlert(data.error || "Не вдалося зберегти керівників", "danger");
+          return;
+        }
+        managerSyncIds = data.manager_sync_ids || managerSyncIds;
+      })
+      .catch(function () {
+        showAlert("Не вдалося зберегти керівників", "danger");
+      });
+  }
+
+  function renderMembers() {
+    if (!members.length) {
+      membersList.innerHTML = '<div class="mh-kanban-empty">Зареєструйте виконавців</div>';
+      return;
+    }
+    membersList.innerHTML = members.map(function (m) {
+      return '<div class="mh-member-row" data-id="' + m.id + '">' +
+        "<div><strong>" + esc(m.name) + "</strong><span>" +
+        (m.discord_id ? "ID " + esc(m.discord_id) : "без Discord ID — не буде пінгу") +
+        "</span></div>" +
+        '<button type="button" class="btn btn-sm btn-outline-danger" data-del="' + m.id + '">Видалити</button>' +
+        "</div>";
+    }).join("");
+  }
+
+  function updateCount(col) {
+    const n = col.querySelectorAll(".mh-task-card").length;
+    const badge = col.querySelector("[data-count]");
+    if (badge) badge.textContent = String(n);
+    const list = col.querySelector("[data-list]");
+    let empty = list.querySelector(".mh-kanban-empty");
+    if (n === 0) {
+      if (!empty) {
+        empty = document.createElement("div");
+        empty.className = "mh-kanban-empty";
+        empty.textContent = "Порожньо";
+        list.appendChild(empty);
+      }
+    } else if (empty) {
+      empty.remove();
+    }
+  }
+
+  function dueHtml(task) {
+    const due = task.deadline || "";
+    if (!due) return "";
+    const overdue = !!task.deadline_overdue;
+    return '<span class="mh-task-due' + (overdue ? " is-overdue" : "") +
+      '"><i class="fas fa-clock"></i>' + esc(due) + "</span>";
+  }
+
+  function fillCard(el, task) {
+    el.dataset.id = String(task.id);
+    el.dataset.title = task.title || "";
+    el.dataset.description = task.description || "";
+    el.dataset.assignee = task.assignee || "";
+    el.dataset.memberSyncId = (task.member_sync_ids || []).join(",") || (task.member_sync_id || "");
+    el.dataset.deadline = task.deadline || "";
+    const people = task.assignees && task.assignees.length
+      ? task.assignees
+      : (task.assignee ? [{ name: task.assignee }] : []);
+    const meta = dueHtml(task) + people.map(function (person) {
+      return '<span class="mh-task-assignee"><i class="fas fa-user"></i>' +
+        esc(person.name || "") + "</span>";
+    }).join("");
+    el.innerHTML =
+      "<h3>" + esc(task.title) + "</h3>" +
+      (task.description ? "<p>" + esc(task.description) + "</p>" : "") +
+      (meta ? '<div class="mh-task-meta">' + meta + "</div>" : "");
+  }
+
+  function makeCard(task) {
+    const el = document.createElement("article");
+    el.className = "mh-task-card";
+    el.draggable = true;
+    fillCard(el, task);
+    return el;
+  }
+
+  function columnByStatus(status) {
+    return board.querySelector('.mh-kanban-col[data-status="' + status + '"]');
+  }
+
+  function dropIndex(list, y) {
+    const cards = Array.prototype.slice.call(
+      list.querySelectorAll(".mh-task-card:not(.is-dragging)")
+    );
+    for (let i = 0; i < cards.length; i += 1) {
+      const rect = cards[i].getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) return i;
+    }
+    return cards.length;
+  }
+
+  function showNotify(data) {
+    if (!data || !data.notify) return;
+    if (data.notify.ok) showAlert(data.notify.message, "success");
+    else showAlert(data.notify.error || "Не вдалося надіслати в Discord", "danger");
+  }
+
+  board.addEventListener("dragstart", function (ev) {
+    const card = ev.target.closest(".mh-task-card");
+    if (!card) return;
+    dragged = card;
+    card.classList.add("is-dragging");
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", card.dataset.id || "");
+  });
+
+  board.addEventListener("dragend", function () {
+    if (dragged) dragged.classList.remove("is-dragging");
+    dragged = null;
+    justDragged = true;
+    setTimeout(function () { justDragged = false; }, 80);
+    board.querySelectorAll(".mh-kanban-list").forEach(function (list) {
+      list.classList.remove("is-over");
+    });
+  });
+
+  board.addEventListener("dragover", function (ev) {
+    const list = ev.target.closest("[data-list]");
+    if (!list || !dragged) return;
+    ev.preventDefault();
+    list.classList.add("is-over");
+  });
+
+  board.addEventListener("dragleave", function (ev) {
+    const list = ev.target.closest("[data-list]");
+    if (list && !list.contains(ev.relatedTarget)) {
+      list.classList.remove("is-over");
+    }
+  });
+
+  board.addEventListener("drop", function (ev) {
+    const list = ev.target.closest("[data-list]");
+    if (!list || !dragged) return;
+    ev.preventDefault();
+    list.classList.remove("is-over");
+    const destCol = list.closest(".mh-kanban-col");
+    const srcCol = dragged.closest(".mh-kanban-col");
+    const status = destCol.dataset.status;
+    const index = dropIndex(list, ev.clientY);
+    const empty = list.querySelector(".mh-kanban-empty");
+    if (empty) empty.remove();
+    const cards = list.querySelectorAll(".mh-task-card:not(.is-dragging)");
+    if (index >= cards.length) list.appendChild(dragged);
+    else list.insertBefore(dragged, cards[index]);
+    updateCount(destCol);
+    if (srcCol && srcCol !== destCol) updateCount(srcCol);
+    const taskId = dragged.dataset.id;
+    fetch("{{ url_for('api_team_task_move', task_id=0) }}".replace("/0/move", "/" + taskId + "/move"), {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ status: status, index: index }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          window.location.reload();
+          return;
+        }
+        showNotify(data);
+      })
+      .catch(function () {
+        window.location.reload();
+      });
+  });
+
+  board.addEventListener("click", function (ev) {
+    if (justDragged) return;
+    const card = ev.target.closest(".mh-task-card");
+    if (!card) return;
+    idInput.value = card.dataset.id || "";
+    titleInput.value = card.dataset.title || "";
+    descInput.value = card.dataset.description || "";
+    deadlineInput.value = card.dataset.deadline || "";
+    fillAssignees(card.dataset.memberSyncId || "", card.dataset.assignee || "");
+    notifyBox.checked = false;
+    syncNotifyState();
+    modalTitle.textContent = "Редагувати задачу";
+    deleteBtn.classList.remove("d-none");
+    modal.show();
+  });
+
+  document.getElementById("task-new-btn").addEventListener("click", function () {
+    idInput.value = "";
+    form.reset();
+    fillAssignees("", "");
+    notifyBox.checked = true;
+    syncNotifyState();
+    modalTitle.textContent = "Нова задача";
+    deleteBtn.classList.add("d-none");
+    modal.show();
+    setTimeout(function () { titleInput.focus(); }, 200);
+  });
+
+  assigneesBox.addEventListener("change", function () {
+    const chosen = selectedMembers();
+    if (chosen.length && discordWebhook) notifyBox.checked = true;
+    syncNotifyState();
+  });
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    const chosen = selectedMembers();
+    const payload = {
+      title: titleInput.value.trim(),
+      description: descInput.value.trim(),
+      deadline: deadlineInput.value.trim(),
+      assignee: chosen.map(function (m) { return m.name; }).join(", "),
+      member_sync_ids: chosen.map(function (m) { return m.sync_id; }),
+      notify: !!(notifyBox.checked && discordWebhook && chosen.length),
+    };
+    if (!payload.title) return;
+    const taskId = idInput.value;
+    const url = taskId
+      ? "{{ url_for('api_team_task_item', task_id=0) }}".replace("/0", "/" + taskId)
+      : "{{ url_for('api_team_tasks') }}";
+    fetch(url, {
+      method: taskId ? "PATCH" : "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(payload),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          showAlert(data.error || "Не вдалося зберегти", "danger");
+          return;
+        }
+        modal.hide();
+        if (taskId) {
+          const card = board.querySelector('.mh-task-card[data-id="' + taskId + '"]');
+          if (card) fillCard(card, data.task);
+        } else {
+          const col = columnByStatus(data.task.status || "todo");
+          const list = col.querySelector("[data-list]");
+          list.appendChild(makeCard(data.task));
+          updateCount(col);
+        }
+        showNotify(data);
+      })
+      .catch(function () {
+        showAlert("Не вдалося зберегти задачу", "danger");
+      });
+  });
+
+  deleteBtn.addEventListener("click", function () {
+    const taskId = idInput.value;
+    if (!taskId || !window.confirm("Видалити цю задачу?")) return;
+    fetch("{{ url_for('api_team_task_item', task_id=0) }}".replace("/0", "/" + taskId), {
+      method: "DELETE",
+      headers: jsonHeaders(),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) return;
+        modal.hide();
+        const card = board.querySelector('.mh-task-card[data-id="' + taskId + '"]');
+        if (!card) return;
+        const col = card.closest(".mh-kanban-col");
+        card.remove();
+        updateCount(col);
+      });
+  });
+
+  document.getElementById("members-btn").addEventListener("click", function () {
+    webhookInput.value = discordWebhook || "";
+    renderMembers();
+    renderManagers();
+    membersModal.show();
+  });
+
+  membersList.addEventListener("click", function (ev) {
+    const btn = ev.target.closest("[data-del]");
+    if (!btn) return;
+    const mid = btn.getAttribute("data-del");
+    if (!window.confirm("Видалити цю людину зі списку?")) return;
+    fetch("{{ url_for('api_team_member_item', member_id=0) }}".replace("/0", "/" + mid), {
+      method: "DELETE",
+      headers: jsonHeaders(),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) return;
+        members = members.filter(function (m) { return String(m.id) !== String(mid); });
+        renderMembers();
+        renderManagers();
+        saveManagers();
+        fillAssignees(selectedSidsCsv(), "");
+      });
+  });
+
+  document.getElementById("member-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    const name = document.getElementById("member-name").value.trim();
+    const discordId = document.getElementById("member-discord").value.trim();
+    fetch("{{ url_for('api_team_members') }}", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ name: name, discord_id: discordId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          showAlert(data.error || "Не вдалося додати", "danger");
+          return;
+        }
+        members.push(data.member);
+        members.sort(function (a, b) {
+          return String(a.name || "").localeCompare(String(b.name || ""), "uk");
+        });
+        document.getElementById("member-form").reset();
+        renderMembers();
+        renderManagers();
+        fillAssignees(selectedSidsCsv(), "");
+      });
+  });
+
+  document.getElementById("webhook-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    fetch("{{ url_for('api_team_settings') }}", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ discord_webhook: webhookInput.value.trim() }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          showAlert(data.error || "Не вдалося зберегти webhook", "danger");
+          return;
+        }
+        discordWebhook = data.discord_webhook || "";
+        webhookInput.value = discordWebhook;
+        syncNotifyState();
+        showAlert(discordWebhook ? "Discord webhook збережено." : "Webhook очищено.", "success");
+      });
+  });
+
+  managersList.addEventListener("change", saveManagers);
+
+  webhookInput.value = discordWebhook || "";
+  if (typeof initDateInputs === "function") initDateInputs(form);
+  renderMembers();
+  renderManagers();
+})();
+</script>
+{% endblock %}
